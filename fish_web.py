@@ -2,10 +2,7 @@ from fastapi import FastAPI, UploadFile, HTTPException,Request,Body
 from fastapi.responses import StreamingResponse,FileResponse
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
-from ultralytics import YOLO
-from ultralytics.utils import LOGGER
 from openai import AsyncOpenAI
-from pydub import AudioSegment
 import time
 import numpy as np
 from collections import defaultdict, deque
@@ -40,7 +37,6 @@ app.add_middleware(
 
 #環境変数
 
-LOGGER.setLevel("WARNING")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
