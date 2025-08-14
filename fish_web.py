@@ -20,7 +20,45 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 # 環境変数取得
+import socket
+
+# IPv4強制設定
+def force_ipv4_connection(db_url):
+    """IPv4接続を強制する"""
+    try:
+        # ホスト名を IPv4 アドレスに解決
+        hostname = "db.bztfqjswzzlnmparpmqf.supabase.co"
+        ipv4_address = socket.getaddrinfo(hostname, None, socket.AF_INET)[0][4][0]
+        print(f"[DNS解決] {hostname} -> {ipv4_address}")
+        
+        # URL内のホスト名をIPアドレスに置換
+        modified_url = db_url.replace(hostname, ipv4_address)
+        return modified_url
+    except Exception as e:
+        print(f"[DNS解決エラー] {e}")
+        return db_url
+
+# データベース接続（IPv4強制版）
 DB_URL = os.getenv("DB_URL")
+if DB_URL:
+    try:
+        # IPv4強制接続
+        ipv4_db_url = force_ipv4_connection(DB_URL)
+        print(f"[IPv4接続] {ipv4_db_url[:50]}...")
+        
+        pg_conn = psycopg2.connect(ipv4_db_url, cursor_factory=RealDictCursor)
+        pg_conn.autocommit = True
+        print("✅ IPv4接続成功!")
+    except Exception as e:
+        print(f"❌ IPv4接続エラー: {e}")
+        # フォールバック: 元のURLで再試行
+        try:
+            pg_conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+            pg_conn.autocommit = True
+            print("✅ フォールバック接続成功!")
+        except Exception as e2:
+            print(f"❌ 全接続失敗: {e2}")
+            exit(1)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 INFERENCE_SERVER_URL = os.getenv("INFERENCE_SERVER_URL", "http://localhost:8001")
