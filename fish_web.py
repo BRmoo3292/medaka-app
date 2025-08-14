@@ -22,9 +22,6 @@ load_dotenv()
 # データベースのURLを環境変数から取得、デフォルトはローカルのPostgreSQL
 DB_URL = os.getenv("DB_URL")
 pg_conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
-pg_conn.autocommit = True
-print(f"[起動時] DB接続成功: {DB_URL}")
-
 pg_conn.autocommit = True #データの変更を即座にデータベースに反映させるために自動コミットを有効にする
 app = FastAPI()
 app.add_middleware(
@@ -35,13 +32,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
-
-conversation_history = {}
+print(f"[起動時] DB接続成功: {DB_URL}")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 INFERENCE_SERVER_URL = os.getenv("INFERENCE_SERVER_URL", "https://5f600f70dd86.ngrok-free.app")
+model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
+print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
+print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
+print(f"[起動時] Gemini API: {'設定済み' if GEMINI_API_KEY else '未設定'}")
+
 # グローバル変数
+# conversation_history = {}
 CONVERSATION_LOG_FILE = "conversation_log.csv"
 conversation_history = defaultdict(lambda:deque(maxlen=10))  
 speed_history = defaultdict(lambda: deque(maxlen=75))
@@ -141,6 +142,31 @@ try:
 except Exception as e:
     print(f"❌ DB接続エラー: {e}")
     exit(1)
+openai_client = None
+if OPENAI_API_KEY and OPENAI_API_KEY.startswith("sk-"):
+    try:
+        from openai import AsyncOpenAI
+        openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        print("✅ OpenAI API設定完了")
+    except Exception as e:
+        print(f"⚠️ OpenAI設定エラー: {e}")
+        openai_client = None
+else:
+    print("⚠️ OpenAI API未設定")
+
+# Gemini設定（条件付き）
+model_gemini = None
+if GEMINI_API_KEY and GEMINI_API_KEY.startswith("AIza"):
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
+        print("✅ Gemini API設定完了")
+    except Exception as e:
+        print(f"⚠️ Gemini設定エラー: {e}")
+        model_gemini = None
+else:
+    print("⚠️ Gemini API未設定")
 #ベクトル検索の関数
 async def find_similar_conversation(user_input: str,development_stage: str):
         # ユーザー入力をベクトル化
