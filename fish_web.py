@@ -16,13 +16,12 @@ import csv
 from datetime import datetime
 import psycopg2# psycopg2はPostgreSQLデータベースに接続するためのライブラリ
 from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
-# 最初に環境変数を読み込み
-load_dotenv()
+
 # データベースのURLを環境変数から取得、デフォルトはローカルのPostgreSQL
 DB_URL = os.getenv("DB_URL")
 pg_conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 pg_conn.autocommit = True #データの変更を即座にデータベースに反映させるために自動コミットを有効にする
+print(f"[起動時] DB接続成功: {DB_URL}")
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -31,19 +30,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-print(f"[起動時] DB接続成功: {DB_URL}")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-INFERENCE_SERVER_URL = os.getenv("INFERENCE_SERVER_URL", "https://5f600f70dd86.ngrok-free.app")
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+INFERENCE_SERVER_URL = os.getenv("INFERENCE_SERVER_URL")
 model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
 print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
 print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
 print(f"[起動時] Gemini API: {'設定済み' if GEMINI_API_KEY else '未設定'}")
 
 # グローバル変数
-# conversation_history = {}
-CONVERSATION_LOG_FILE = "conversation_log.csv"
+active_session ={}  # セッション管理用
 conversation_history = defaultdict(lambda:deque(maxlen=10))  
 speed_history = defaultdict(lambda: deque(maxlen=75))
 fps = 15
@@ -51,14 +49,12 @@ latest_health = "Normal"
 track_history = defaultdict(lambda: (0, 0))  
 CURRENT_PROFILE_ID = 1  #プロファイルID
 last_similar_example = defaultdict(lambda: None)  # 2回目の会話待ちの情報を保持
+
 # Session Pooler対応のデータベース接続関数
 def connect_to_database(db_url, max_retries=3):
-    """Supabase Session Pooler経由でデータベースに接続"""
-    
-    # Session Poolerの確認
+    #Supabase Session Pooler経由でデータベースに接続
     if "pooler.supabase.com" in db_url:
         print("[DB接続] Supabase Pooler接続を使用")
-        
         # ポート番号の確認
         if ":5432" in db_url:
             print("[DB接続] Session Pooler (ポート5432)")
@@ -142,31 +138,9 @@ try:
 except Exception as e:
     print(f"❌ DB接続エラー: {e}")
     exit(1)
-openai_client = None
-if OPENAI_API_KEY and OPENAI_API_KEY.startswith("sk-"):
-    try:
-        from openai import AsyncOpenAI
-        openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-        print("✅ OpenAI API設定完了")
-    except Exception as e:
-        print(f"⚠️ OpenAI設定エラー: {e}")
-        openai_client = None
-else:
-    print("⚠️ OpenAI API未設定")
 
-# Gemini設定（条件付き）
-model_gemini = None
-if GEMINI_API_KEY and GEMINI_API_KEY.startswith("AIza"):
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
-        print("✅ Gemini API設定完了")
-    except Exception as e:
-        print(f"⚠️ Gemini設定エラー: {e}")
-        model_gemini = None
-else:
-    print("⚠️ Gemini API未設定")
+
+
 #ベクトル検索の関数
 async def find_similar_conversation(user_input: str,development_stage: str):
         # ユーザー入力をベクトル化
@@ -266,23 +240,59 @@ def get_medaka_reply(user_input, healt_status="不明",conversation_hist=None,si
     print(f"[応答生成] 生成された応答: '{reply}'")
     return reply
 
-# """会話履歴をCSVファイルに保存する"""
-def log_conversation(user_input, kinchan_reply):
-    """会話履歴をCSVファイルに保存する"""
-    try:
-        file_exists = os.path.isfile(CONVERSATION_LOG_FILE)
+class ConversationSession:
+    def __init__(self,profile_id:int ,first_input:str,medaka_response:str,similar_example: dict, current_stage: str):
+        self.profile_id = profile_id
+        self.first_child_input = first_input
+        self.medaka_response = medaka_response
+        self.similar_example = similar_example
+        self.current_stage = current_stage
+        self.stared_at = datetime.now()
+
+    def complete_session(self, second_input: str, assessment_result: tuple):
+        """セッションを完了し、DBに保存"""
+        self.second_child_input = second_input
+        self.assessment_result = assessment_result[0]  # "昇格" or "現状維持"
+        self.maintain_score = round(float(assessment_result[1]), 2)      # 小数第二位まで
+        self.upgrade_score = round(float(assessment_result[2]), 2)       # 小数第二位まで
+        self.confidence_score = round(float(abs(self.upgrade_score - self.maintain_score)), 2)  # 小数第二位まで
         
-        # UTF-8 BOM付きで保存
-        with open(CONVERSATION_LOG_FILE, "a", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f, quoting=csv.QUOTE_ALL)  # 全てクォート
-            if not file_exists:
-                writer.writerow(["timestamp", "user_input", "kinchan_reply"])
-            writer.writerow([datetime.now().isoformat(), user_input, kinchan_reply])
-            
-        print(f"[CSVログ] 保存成功: {user_input[:10]}...")
-        
-    except Exception as e:
-        print(f"[CSVログ] 保存エラー: {e}")
+        # データベースに保存
+        return self._save_to_database()
+    
+    def _save_to_database(self) -> int:
+        """セッションデータをデータベースに保存"""
+        try:
+            with pg_conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO conversation_sessions (
+                        profile_id, first_child_input, medaka_response, second_child_input,
+                        assessment_result, maintain_similarity_score, upgrade_similarity_score, 
+                        confidence_score, current_stage
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    ) RETURNING id;
+                """, (
+                    self.profile_id,
+                    self.first_child_input,
+                    self.medaka_response,
+                    self.second_child_input,
+                    self.assessment_result,
+                    self.maintain_score,      
+                    self.upgrade_score,       
+                    self.confidence_score,   
+                    self.current_stage
+                ))
+                
+                session_id = cur.fetchone()['id']
+                print(f"[セッションDB] 保存完了 ID: {session_id}")
+                print(f"[セッションDB] 判定結果: {self.assessment_result} (信頼度: {self.confidence_score:.3f})")
+                
+                return session_id
+                
+        except Exception as e:
+            print(f"[セッションDB] 保存エラー: {e}")
+            return None
 
 #会話分類
 async def classify_child_response(
@@ -359,63 +369,66 @@ async def talk_with_fish_text(request: Request):
     if CURRENT_PROFILE_ID not in conversation_history:
         conversation_history[CURRENT_PROFILE_ID] = []
     current_history = conversation_history[CURRENT_PROFILE_ID]
-    #前回の類似例があるか
-    similar_example = last_similar_example[CURRENT_PROFILE_ID]
+    session = active_session.get(CURRENT_PROFILE_ID)
+    assessment_result = None  
+    similar_example = None
+
     assessment_result = None  # 初期化
-    if similar_example is None:
+    if session is None:
       # 1回目の会話：類似例を検索
         print("[会話フロー] 1回目の会話 - 類似例を検索")
         similar_example = await find_similar_conversation(user_input, current_stage)
-        first_child_input = user_input
+        reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
         # 類似例を保存（次回の判定用）
         if similar_example and 'child_reply_1_embedding' in similar_example:
-            last_similar_example[CURRENT_PROFILE_ID] = similar_example
-            print("[会話フロー] 類似例を保存 - 次回発達段階判定予定")
+            session = ConversationSession(
+                    profile_id = CURRENT_PROFILE_ID,
+                    first_input = user_input,
+                    medaka_response = reply_text,
+                    similar_example = similar_example,
+                    current_stage = current_stage
+            )
+            active_session[CURRENT_PROFILE_ID] = session
+            print("[セッション] セッション作成完了 - 次回判定実行予定")
+        else:
+            print("[セッション] 類似例なし - 通常の会話として処理")
     else:
         #2回目の会話の場合、発達段階判定を実行
         print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
-        second_child_input = user_input
         #児童の応答分類
         assessment = await classify_child_response(
             user_input,
-            similar_example,
+            session.similar_example,
             openai_client,
         )
-
         assessment_result = {
             'result': assessment[0],
-            'maintain_score': float(assessment[1]),
-            'upgrade_score': float(assessment[2]),
+            'maintain_score': round(float(assessment[1]), 2),      # 小数第二位まで
+            'upgrade_score': round(float(assessment[2]), 2),       # 小数第二位まで
+            'confidence_score': round(float(abs(assessment[2] - assessment[1])), 2),  # 小数第二位まで
             'assessed_at': datetime.now(),
         }
-        #類似例をクリア
-        last_similar_example[CURRENT_PROFILE_ID] = None  
-        similar_example = None
+        reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
+        session_id = session.complete_session(user_input, assessment)
+        del active_session[CURRENT_PROFILE_ID]  # セッション完了後は削除
+        print(f"[セッション] 判定完了 - セッションID: {session_id}")
 
-    #応答生成
-    reply_text = get_medaka_reply(
-        user_input,
-        latest_health, 
-        current_history, 
-        similar_example,
-        profile
-    )   
-    first_reply = reply_text  # 初回の応答を保存
-    # 会話履歴に追加
+        # 会話履歴に追加
     conversation_entry = {
-        "child": user_input,
-        "medaka": reply_text,
-        "timestamp": datetime.now(),
-        "similar_example_used": similar_example['text'] if similar_example else None,
-        "similarity_score": similar_example['distance'] if similar_example else None,
-        "has_assessment": 'assessment_result' in locals(),
-        "assessment_result": assessment_result if 'assessment_result' in locals() else None
+            "child": user_input,
+            "medaka": reply_text,
+            "timestamp": datetime.now(),
+            "similar_example_used": similar_example['text'] if similar_example else None,
+            "similarity_score": similar_example['distance'] if similar_example else None,
+            "has_assessment": assessment_result is not None,
+            "assessment_result": assessment_result,
+            "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
+
     }
     conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
     if len(conversation_history[CURRENT_PROFILE_ID]) > 20:
         conversation_history[CURRENT_PROFILE_ID] = conversation_history[CURRENT_PROFILE_ID][-20:]
-    # CSVログ保存
-    log_conversation(user_input, reply_text)
+
     print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
     t2 = time.time()
     
