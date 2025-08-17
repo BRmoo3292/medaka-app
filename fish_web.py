@@ -253,9 +253,9 @@ class ConversationSession:
         """セッションを完了し、DBに保存"""
         self.second_child_input = second_input
         self.assessment_result = assessment_result[0]  # "昇格" or "現状維持"
-        self.maintain_score = round(float(assessment_result[1]), 2)      # 小数第二位まで
-        self.upgrade_score = round(float(assessment_result[2]), 2)       # 小数第二位まで
-        self.confidence_score = round(float(abs(self.upgrade_score - self.maintain_score)), 2)  # 小数第二位まで
+        self.maintain_score = round(float(assessment_result[1]), 3)      # 小数第二位まで
+        self.upgrade_score = round(float(assessment_result[2]), 3)       # 小数第二位まで
+        self.confidence_score = round(float(abs(self.upgrade_score - self.maintain_score)), 5)  # 小数第二位まで
         
         # データベースに保存
         return self._save_to_database()
@@ -403,9 +403,9 @@ async def talk_with_fish_text(request: Request):
         )
         assessment_result = {
             'result': assessment[0],
-            'maintain_score': round(float(assessment[1]), 2),      # 小数第二位まで
-            'upgrade_score': round(float(assessment[2]), 2),       # 小数第二位まで
-            'confidence_score': round(float(abs(assessment[2] - assessment[1])), 2),  # 小数第二位まで
+            'maintain_score': round(float(assessment[1]), 3),      # 小数第二位まで
+            'upgrade_score': round(float(assessment[2]), 3),       # 小数第二位まで
+            'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),  # 小数第二位まで
             'assessed_at': datetime.now(),
         }
         reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
