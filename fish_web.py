@@ -10,6 +10,7 @@ import httpx
 import io
 import tempfile
 import io
+from PIL import Image
 import os
 import google.generativeai as genai
 import csv
@@ -470,8 +471,19 @@ async def predict(file: UploadFile):
         # 推論サーバーにリクエスト送信
         async with httpx.AsyncClient(timeout=30.0) as client:
             files = {"file": (file.filename, io.BytesIO(file_content), file.content_type)}
-            response = await client.post(f"{INFERENCE_SERVER_URL}/predict", files=files)
+            image = Image.open(io.BytesIO(file_content))
+            if image.width > 288 or image.height > 512:
+                image.thumbnail((288, 512), Image.Resampling.LANCZOS)
+                    # JPEG品質を下げて圧縮
+            compressed_buffer = io.BytesIO()
+            image.save(compressed_buffer, format='JPEG', quality=85, optimize=True)
+            compressed_content = compressed_buffer.getvalue()
             
+            # 推論サーバーにリクエスト送信
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                files = {"file": (file.filename, io.BytesIO(compressed_content), "image/jpeg")}
+                response = await client.post(f"{INFERENCE_SERVER_URL}/predict", files=files)
+                
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, 
                                   detail=f"Inference server error: {response.text}")
