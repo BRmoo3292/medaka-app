@@ -462,121 +462,151 @@ async def talk_with_fish_text(request: Request):
 
 
 
+import time
+import io
+from PIL import Image
+
 @app.post("/predict")
 async def predict(file: UploadFile):
-   global latest_health
+    global latest_health
+    
+    # 全体の開始時間
+    total_start = time.time()
+    timestamps = {}
+    
+    try:
+        # 1. ファイル読み込み時間測定
+        file_read_start = time.time()
+        file_content = await file.read()
+        timestamps['file_read'] = (time.time() - file_read_start) * 1000
+        
+        # 元ファイルサイズ情報
+        original_size_kb = len(file_content) / 1024
+        print(f"📁 Original file size: {original_size_kb:.1f}KB")
+        
+        # 2. 画像圧縮処理時間
+        compression_start = time.time()
+        
+        # 画像を開く
+        image = Image.open(io.BytesIO(file_content))
+        original_resolution = f"{image.width}×{image.height}"
+        print(f"🖼️  Original resolution: {original_resolution}")
+        
+        # 288×516にリサイズ（アスペクト比は無視して強制リサイズ）
+        resized_image = image.resize((288, 516), Image.Resampling.LANCZOS)
+        
+        # 圧縮された画像をバイト列に変換
+        compressed_buffer = io.BytesIO()
+        resized_image.save(compressed_buffer, format='JPEG', quality=85, optimize=True)
+        compressed_content = compressed_buffer.getvalue()
+        
+        timestamps['compression'] = (time.time() - compression_start) * 1000
+        
+        # 圧縮後のファイルサイズ
+        compressed_size_kb = len(compressed_content) / 1024
+        compression_ratio = (original_size_kb - compressed_size_kb) / original_size_kb * 100
+        print(f"📦 Compressed size: {compressed_size_kb:.1f}KB (-{compression_ratio:.1f}%)")
+        print(f"🎯 Target resolution: 288×516")
+        
+        # 3. HTTPクライアント作成時間
+        client_create_start = time.time()
+        client = httpx.AsyncClient(timeout=30.0)
+        timestamps['client_create'] = (time.time() - client_create_start) * 1000
+        
+        # 4. リクエスト準備時間
+        request_prep_start = time.time()
+        files = {"file": (file.filename, io.BytesIO(compressed_content), "image/jpeg")}
+        timestamps['request_prep'] = (time.time() - request_prep_start) * 1000
+        
+        # 5. HTTP リクエスト送信時間（最重要）
+        http_request_start = time.time()
+        response = await client.post(f"{INFERENCE_SERVER_URL}/predict", files=files)
+        timestamps['http_request'] = (time.time() - http_request_start) * 1000
+        
+        # 6. レスポンス検証時間
+        validation_start = time.time()
+        if response.status_code != 200:
+            await client.aclose()
+            raise HTTPException(status_code=response.status_code, 
+                              detail=f"Inference server error: {response.text}")
+        timestamps['validation'] = (time.time() - validation_start) * 1000
+        
+        # 7. ヘッダー処理時間
+        header_start = time.time()
+        health_status = response.headers.get("X-Health-Status", "Unknown")
+        latest_health = health_status
+        timestamps['header_process'] = (time.time() - header_start) * 1000
+        
+        # 8. レスポンス処理時間
+        response_prep_start = time.time()
+        response_content = response.content
+        response_size_kb = len(response_content) / 1024
+        result = StreamingResponse(
+            io.BytesIO(response_content),
+            media_type="image/jpeg"
+        )
+        timestamps['response_prep'] = (time.time() - response_prep_start) * 1000
+        
+        # 9. クリーンアップ時間
+        cleanup_start = time.time()
+        await client.aclose()
+        timestamps['cleanup'] = (time.time() - cleanup_start) * 1000
+        
+        # 合計時間計算
+        total_time = (time.time() - total_start) * 1000
+        
+        # 🔍 詳細ログ出力
+        print("\n" + "="*50)
+        print("🚀 PERFORMANCE ANALYSIS")
+        print("="*50)
+        print(f"📤 Upload size: {compressed_size_kb:.1f}KB (was {original_size_kb:.1f}KB)")
+        print(f"📥 Response size: {response_size_kb:.1f}KB")
+        print(f"🌐 Total data: {(compressed_size_kb + response_size_kb):.1f}KB")
+        print(f"🎯 Resolution: {original_resolution} → 288×516")
+        print("-" * 30)
+        
+        for step, duration in timestamps.items():
+            percentage = (duration / total_time) * 100
+            bar_length = int(percentage / 5)  # 5%につき1文字
+            bar = "█" * bar_length + "░" * (20 - bar_length)
+            print(f"{step:15} │ {bar} │ {duration:6.1f}ms ({percentage:4.1f}%)")
+        
+        print("-" * 30)
+        print(f"⏱️  TOTAL TIME: {total_time:.1f}ms")
+        
+        # 🚨 ボトルネック特定
+        max_step = max(timestamps.items(), key=lambda x: x[1])
+        if max_step[1] > total_time * 0.5:  # 50%以上を占める処理
+            print(f"🚨 BOTTLENECK: {max_step[0]} ({max_step[1]:.1f}ms)")
+        
+        # 📊 通信速度計算
+        if timestamps['http_request'] > 0:
+            total_data_mb = (compressed_size_kb + response_size_kb) / 1024
+            speed_mbps = (total_data_mb * 8) / (timestamps['http_request'] / 1000)
+            print(f"🌐 Effective speed: {speed_mbps:.2f} Mbps")
+            
+            # 速度判定
+            if speed_mbps < 1:
+                print("🐌 Very slow - likely bandwidth limited")
+            elif speed_mbps < 10:
+                print("⚠️  Slow - network/tunnel overhead")
+            else:
+                print("✅ Good speed - latency is the issue")
+        
+        print("="*50 + "\n")
+        
+        return result
+            
+    except httpx.TimeoutException:
+        print(f"⏰ Timeout after {(time.time() - total_start)*1000:.1f}ms")
+        raise HTTPException(status_code=504, detail="Inference server timeout")
+    except httpx.ConnectError:
+        print(f"🔌 Connection error after {(time.time() - total_start)*1000:.1f}ms")
+        raise HTTPException(status_code=503, detail="Cannot connect to inference server")
+    except Exception as e:
+        print(f"💥 Error after {(time.time() - total_start)*1000:.1f}ms: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
    
-   # 全体の開始時間
-   total_start = time.time()
-   timestamps = {}
-   
-   try:
-       # 1. ファイル読み込み時間測定
-       file_read_start = time.time()
-       file_content = await file.read()
-       timestamps['file_read'] = (time.time() - file_read_start) * 1000
-       
-       # ファイルサイズ情報
-       file_size_kb = len(file_content) / 1024
-       print(f"📁 File size: {file_size_kb:.1f}KB")
-       
-       # 2. HTTPクライアント作成時間
-       client_create_start = time.time()
-       client = httpx.AsyncClient(timeout=30.0)
-       timestamps['client_create'] = (time.time() - client_create_start) * 1000
-       
-       # 3. リクエスト準備時間
-       request_prep_start = time.time()
-       files = {"file": (file.filename, io.BytesIO(file_content), file.content_type)}
-       timestamps['request_prep'] = (time.time() - request_prep_start) * 1000
-       
-       # 4. HTTP リクエスト送信時間（最重要）
-       http_request_start = time.time()
-       response = await client.post(f"{INFERENCE_SERVER_URL}/predict", files=files)
-       timestamps['http_request'] = (time.time() - http_request_start) * 1000
-       
-       # 5. レスポンス検証時間
-       validation_start = time.time()
-       if response.status_code != 200:
-           await client.aclose()
-           raise HTTPException(status_code=response.status_code, 
-                             detail=f"Inference server error: {response.text}")
-       timestamps['validation'] = (time.time() - validation_start) * 1000
-       
-       # 6. ヘッダー処理時間
-       header_start = time.time()
-       health_status = response.headers.get("X-Health-Status", "Unknown")
-       latest_health = health_status
-       timestamps['header_process'] = (time.time() - header_start) * 1000
-       
-       # 7. レスポンス処理時間
-       response_prep_start = time.time()
-       response_content = response.content
-       response_size_kb = len(response_content) / 1024
-       result = StreamingResponse(
-           io.BytesIO(response_content),
-           media_type="image/jpeg"
-       )
-       timestamps['response_prep'] = (time.time() - response_prep_start) * 1000
-       
-       # 8. クリーンアップ時間
-       cleanup_start = time.time()
-       await client.aclose()
-       timestamps['cleanup'] = (time.time() - cleanup_start) * 1000
-       
-       # 合計時間計算
-       total_time = (time.time() - total_start) * 1000
-       
-       # 🔍 詳細ログ出力
-       print("\n" + "="*50)
-       print("🚀 PERFORMANCE ANALYSIS")
-       print("="*50)
-       print(f"📤 Upload size: {file_size_kb:.1f}KB")
-       print(f"📥 Response size: {response_size_kb:.1f}KB")
-       print(f"🌐 Total data: {(file_size_kb + response_size_kb):.1f}KB")
-       print("-" * 30)
-       
-       for step, duration in timestamps.items():
-           percentage = (duration / total_time) * 100
-           bar_length = int(percentage / 5)  # 5%につき1文字
-           bar = "█" * bar_length + "░" * (20 - bar_length)
-           print(f"{step:15} │ {bar} │ {duration:6.1f}ms ({percentage:4.1f}%)")
-       
-       print("-" * 30)
-       print(f"⏱️  TOTAL TIME: {total_time:.1f}ms")
-       
-       # 🚨 ボトルネック特定
-       max_step = max(timestamps.items(), key=lambda x: x[1])
-       if max_step[1] > total_time * 0.5:  # 50%以上を占める処理
-           print(f"🚨 BOTTLENECK: {max_step[0]} ({max_step[1]:.1f}ms)")
-       
-       # 📊 通信速度計算
-       if timestamps['http_request'] > 0:
-           total_data_mb = (file_size_kb + response_size_kb) / 1024
-           speed_mbps = (total_data_mb * 8) / (timestamps['http_request'] / 1000)
-           print(f"🌐 Effective speed: {speed_mbps:.2f} Mbps")
-           
-           # 速度判定
-           if speed_mbps < 1:
-               print("🐌 Very slow - likely bandwidth limited")
-           elif speed_mbps < 10:
-               print("⚠️  Slow - network/tunnel overhead")
-           else:
-               print("✅ Good speed - latency is the issue")
-       
-       print("="*50 + "\n")
-       
-       return result
-           
-   except httpx.TimeoutException:
-       print(f"⏰ Timeout after {(time.time() - total_start)*1000:.1f}ms")
-       raise HTTPException(status_code=504, detail="Inference server timeout")
-   except httpx.ConnectError:
-       print(f"🔌 Connection error after {(time.time() - total_start)*1000:.1f}ms")
-       raise HTTPException(status_code=503, detail="Cannot connect to inference server")
-   except Exception as e:
-       print(f"💥 Error after {(time.time() - total_start)*1000:.1f}ms: {str(e)}")
-       raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
 @app.get("/")
 async def read_index():
     return FileResponse('index.html', media_type='text/html')
