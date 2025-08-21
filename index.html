@@ -456,15 +456,12 @@
     let isSending = false;
     
     // フレーム送信
- async function sendFrame() {
+async function sendFrame() {
   if (isSending || !video.videoWidth || !video.videoHeight) return;
   isSending = true;
   
-  const startTime = performance.now();
-  
   try {
-    // 1. キャプチャと回転処理
-    const captureStart = performance.now();
+    // 1. キャプチャと回転処理（既存のまま）
     const isPortrait = video.videoHeight > video.videoWidth;
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -482,87 +479,112 @@
       canvas.height = video.videoHeight;
       ctx.drawImage(video, 0, 0);
     }
-    const captureTime = performance.now() - captureStart;
     
-    // 2. 288×516にリサイズ（重要な最適化）
-    const resizeStart = performance.now();
+    // 2. 【修正】アスペクト比を保持したリサイズ
     const resizeCanvas = document.createElement('canvas');
     const resizeCtx = resizeCanvas.getContext('2d');
     
-    // 目標解像度: 288×516
+    // 元画像のアスペクト比を計算
+    const sourceAspect = canvas.width / canvas.height;
+    const targetAspect = 288 / 516;
+    
+    let drawWidth, drawHeight, offsetX, offsetY;
+    
+    if (sourceAspect > targetAspect) {
+      // 横長画像 → 高さに合わせる
+      drawHeight = 516;
+      drawWidth = 516 * sourceAspect;
+      offsetX = (288 - drawWidth) / 2;
+      offsetY = 0;
+    } else {
+      // 縦長画像 → 幅に合わせる
+      drawWidth = 288;
+      drawHeight = 288 / sourceAspect;
+      offsetX = 0;
+      offsetY = (516 - drawHeight) / 2;
+    }
+    
     resizeCanvas.width = 288;
     resizeCanvas.height = 516;
     
-    // 高品質リサイズ
+    // 背景を黒で塗りつぶし（レターボックス）
+    resizeCtx.fillStyle = '#000000';
+    resizeCtx.fillRect(0, 0, 288, 516);
+    
+    // アスペクト比を保持して描画
     resizeCtx.imageSmoothingEnabled = true;
     resizeCtx.imageSmoothingQuality = 'high';
-    resizeCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, 288, 516);
-    const resizeTime = performance.now() - resizeStart;
+    resizeCtx.drawImage(canvas, offsetX, offsetY, drawWidth, drawHeight);
     
-    // 3. 圧縮してBlob作成
-    const compressionStart = performance.now();
+    // 3. 圧縮とBlob作成（既存のまま）
     const blob = await new Promise(resolve => {
-      resizeCanvas.toBlob(resolve, 'image/jpeg', 0.85); // 品質85%
+      resizeCanvas.toBlob(resolve, 'image/jpeg', 0.85);
     });
-    const compressionTime = performance.now() - compressionStart;
     
-    // 4. ファイルサイズ情報
-    const originalSize = canvas.width * canvas.height * 4; // 元画像の推定サイズ
-    const compressedSize = blob.size;
-    const compressionRatio = ((originalSize - compressedSize) / originalSize * 100).toFixed(1);
-    
-    console.log(`📊 圧縮統計:
-    📷 キャプチャ: ${captureTime.toFixed(1)}ms
-    🎯 リサイズ: ${resizeTime.toFixed(1)}ms (${canvas.width}×${canvas.height} → 288×516)
-    📦 圧縮: ${compressionTime.toFixed(1)}ms
-    📁 サイズ: ${formatFileSize(compressedSize)} (${compressionRatio}% 削減)`);
-    
-    // 5. フォームデータ作成
     const formData = new FormData();
     formData.append('file', blob, 'capture.jpg');
 
-    // 6. サーバーに送信
-    const networkStart = performance.now();
+    // 4. 送信処理（既存のまま）
     const response = await fetch(`${serverUrl}/predict`, {
       method: 'POST',
       body: formData,
-      // 最適化されたヘッダー
-      headers: {
-        'Accept': 'image/jpeg',
-      },
-      // Keep-Alive接続
-      keepalive: true,
     });
     
-    if (!response.ok) throw new Error(`サーバーエラー: ${response.status}`);
+    if (!response.ok) throw new Error('サーバーエラー');
     
     const resultBlob = await response.blob();
-    const networkTime = performance.now() - networkStart;
-    
-    // 7. 結果画像の処理
-    const displayStart = performance.now();
     const resultImg = new Image();
     resultImg.src = URL.createObjectURL(resultBlob);
 
     resultImg.onload = () => {
       currentImageData = resultImg;
       
-      // 表示処理（回転考慮）
+      // 5. 【修正】表示時にも元のサイズに戻す
       if (isPortrait) {
         displayCanvas.width = video.videoWidth;
         displayCanvas.height = video.videoHeight;
         displayCtx.save();
         displayCtx.translate(displayCanvas.width / 2, displayCanvas.height / 2);
         displayCtx.rotate(90 * Math.PI / 180);
-        displayCtx.drawImage(resultImg, -resultImg.width / 2, -resultImg.height / 2);
+        
+        // 結果画像を元のアスペクト比で表示
+        const displayAspect = video.videoWidth / video.videoHeight;
+        let displayDrawWidth, displayDrawHeight;
+        
+        if (displayAspect > targetAspect) {
+          displayDrawWidth = video.videoWidth;
+          displayDrawHeight = video.videoWidth / targetAspect;
+        } else {
+          displayDrawHeight = video.videoHeight;
+          displayDrawWidth = video.videoHeight * targetAspect;
+        }
+        
+        displayCtx.drawImage(resultImg, -displayDrawWidth / 2, -displayDrawHeight / 2, displayDrawWidth, displayDrawHeight);
         displayCtx.restore();
       } else {
-        displayCanvas.width = resultImg.width;
-        displayCanvas.height = resultImg.height;
-        displayCtx.drawImage(resultImg, 0, 0);
+        displayCanvas.width = video.videoWidth;
+        displayCanvas.height = video.videoHeight;
+        
+        // 横向きの場合も同様にアスペクト比調整
+        const displayAspect = video.videoWidth / video.videoHeight;
+        let displayDrawWidth, displayDrawHeight, displayOffsetX, displayOffsetY;
+        
+        if (displayAspect > targetAspect) {
+          displayDrawHeight = video.videoHeight;
+          displayDrawWidth = video.videoHeight * targetAspect;
+          displayOffsetX = (video.videoWidth - displayDrawWidth) / 2;
+          displayOffsetY = 0;
+        } else {
+          displayDrawWidth = video.videoWidth;
+          displayDrawHeight = video.videoWidth / targetAspect;
+          displayOffsetX = 0;
+          displayOffsetY = (video.videoHeight - displayDrawHeight) / 2;
+        }
+        
+        displayCtx.drawImage(resultImg, displayOffsetX, displayOffsetY, displayDrawWidth, displayDrawHeight);
       }
       
-      // フルスクリーン表示の同期
+      // フルスクリーン表示の同期（既存のまま）
       if (isFullscreen) {
         fullscreenCanvas.width = displayCanvas.width;
         fullscreenCanvas.height = displayCanvas.height;
@@ -570,32 +592,16 @@
         fullscreenCtx.drawImage(displayCanvas, 0, 0);
       }
       
-      const displayTime = performance.now() - displayStart;
-      const totalTime = performance.now() - startTime;
-      
-      // ステータス更新
-      if (statusDiv) {
-        const fps = Math.round(1000 / totalTime);
-        statusDiv.innerHTML = `
-          ✅ 解析完了 (${totalTime.toFixed(0)}ms)
-          📁 ${formatFileSize(compressedSize)} → ${formatFileSize(resultBlob.size)}
-          🚀 効率: ${fps} FPS相当
-        `;
-      }
-      
       URL.revokeObjectURL(resultImg.src);
     };
     
   } catch (error) {
     console.error("画像送信エラー:", error);
-    if (statusDiv) {
-      statusDiv.innerHTML = '⚠️ 通信エラーが発生しました';
-    }
+    statusDiv.textContent = '⚠️ 通信エラーが発生しました';
   } finally {
     isSending = false;
   }
 }
-
 // ファイルサイズフォーマット関数
 function formatFileSize(bytes) {
   if (bytes === 0) return '0 B';
@@ -759,7 +765,7 @@ async function checkWebPSupport() {
     // 初期化
     startCamera();
     normalControls.classList.add('hidden');
-    setInterval(sendFrame, 33); // 15fps
+    setInterval(sendFrame, 66); // 15fps
     
     // タッチイベントの最適化
     document.addEventListener('touchstart', function(){}, {passive: true});
