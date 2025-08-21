@@ -50,26 +50,26 @@ latest_health = "Normal"
 track_history = defaultdict(lambda: (0, 0))  
 CURRENT_PROFILE_ID = 1  #プロファイルID
 last_similar_example = defaultdict(lambda: None)  # 2回目の会話待ちの情報を保持
-class OptimizedClient:
-    def __init__(self):
-        self.client = None
-        self.lock = asyncio.Lock()
-    async def get_client(self):
-        async with self.lock:
-            if self.client is None:
-                self.client = httpx.AsyncClient(
-                    timeout=httpx.Timeout(10.0, connect=5.0),
-                    limits=httpx.Limits(
-                        max_connections=100,
-                        max_keepalive_connections=50,
-                        keepalive_expiry=300.0
-                    ),
-                    http2=True,
-                    verify=False
-                )
-        return self.client
-http_client = OptimizedClient()
+optimized_client = None
+@app.on_event("startup")
+async def startup_event():
+   global optimized_client
+   optimized_client = httpx.AsyncClient(
+       timeout=httpx.Timeout(10.0),
+       limits=httpx.Limits(
+           max_connections=20,
+           max_keepalive_connections=10,
+           keepalive_expiry=300.0
+       ),
+       http2=True
+   )
 
+@app.on_event("shutdown")
+async def shutdown_event():
+   global optimized_client
+   if optimized_client:
+       await optimized_client.aclose()
+       
 # Session Pooler対応のデータベース接続関数
 def connect_to_database(db_url, max_retries=3):
     #Supabase Session Pooler経由でデータベースに接続
