@@ -456,21 +456,79 @@
     let isSending = false;
     
     // フレーム送信
+// WebSocket接続
+let ws = null;
+let wsConnected = false;
+
+// WebSocket初期化
+function initWebSocket() {
+  const wsUrl = serverUrl.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
+  ws = new WebSocket(wsUrl);
+  
+  ws.onopen = () => {
+    wsConnected = true;
+    console.log('WebSocket接続');
+  };
+  
+  ws.onmessage = (event) => {
+    const resultImg = new Image();
+    resultImg.src = URL.createObjectURL(event.data);
+    
+    resultImg.onload = () => {
+      currentImageData = resultImg;
+      displayCanvas.width = 516;
+      displayCanvas.height = 288;
+      displayCtx.drawImage(resultImg, 0, 0, 516, 288);
+      
+      if (isFullscreen) {
+        fullscreenCanvas.width = 516;
+        fullscreenCanvas.height = 288;
+        fullscreenCtx.clearRect(0, 0, 516, 288);
+        fullscreenCtx.drawImage(displayCanvas, 0, 0);
+      }
+      
+      URL.revokeObjectURL(resultImg.src);
+      isSending = false;
+    };
+  };
+  
+  ws.onclose = () => {
+    wsConnected = false;
+    setTimeout(initWebSocket, 1000);
+  };
+}
+
+// WebSocket送信
 async function sendFrame() {
   if (isSending || !video.videoWidth || !video.videoHeight) return;
+  
+  if (!wsConnected) {
+    return sendFrameHTTP();
+  }
+  
   isSending = true;
+  
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 516;
+  canvas.height = 288;
+  ctx.drawImage(video, 0, 0, 516, 288);
+  
+  canvas.toBlob(blob => {
+    ws.send(blob);
+  }, 'image/jpeg', 0.8);
+}
 
-  // 横長の解像度に固定
-  const targetWidth = 516;
-  const targetHeight = 288;
+// HTTPフォールバック
+async function sendFrameHTTP() {
+  if (isSending) return;
+  isSending = true;
 
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
-  canvas.width = targetWidth;
-  canvas.height = targetHeight;
-
-  // videoをリサイズして描画（アスペクト比無視で強制リサイズ）
-  ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+  canvas.width = 516;
+  canvas.height = 288;
+  ctx.drawImage(video, 0, 0, 516, 288);
 
   const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
   const formData = new FormData();
@@ -490,16 +548,14 @@ async function sendFrame() {
 
     resultImg.onload = () => {
       currentImageData = resultImg;
-
-      // 結果画像も横長にリサイズして表示
-      displayCanvas.width = targetWidth;
-      displayCanvas.height = targetHeight;
-      displayCtx.drawImage(resultImg, 0, 0, targetWidth, targetHeight);
+      displayCanvas.width = 516;
+      displayCanvas.height = 288;
+      displayCtx.drawImage(resultImg, 0, 0, 516, 288);
 
       if (isFullscreen) {
-        fullscreenCanvas.width = targetWidth;
-        fullscreenCanvas.height = targetHeight;
-        fullscreenCtx.clearRect(0, 0, fullscreenCanvas.width, fullscreenCanvas.height);
+        fullscreenCanvas.width = 516;
+        fullscreenCanvas.height = 288;
+        fullscreenCtx.clearRect(0, 0, 516, 288);
         fullscreenCtx.drawImage(displayCanvas, 0, 0);
       }
 
@@ -513,6 +569,8 @@ async function sendFrame() {
   }
 }
 
+// 初期化実行
+initWebSocket();
     // 音声認識設定
     const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
     recognition.lang = "ja-JP";
