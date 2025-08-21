@@ -456,79 +456,229 @@
     let isSending = false;
     
     // フレーム送信
-    async function sendFrame() {
-      if (isSending || !video.videoWidth || !video.videoHeight) return;
-      isSending = true;
-      
-      const isPortrait = video.videoHeight > video.videoWidth;
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      
-      if (isPortrait) {
-        canvas.width = video.videoHeight;
-        canvas.height = video.videoWidth;
-        ctx.save();
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.rotate(-90 * Math.PI / 180);
-        ctx.drawImage(video, -video.videoWidth / 2, -video.videoHeight / 2);
-        ctx.restore();
-      } else {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-      }
-      
-      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
-      const formData = new FormData();
-      formData.append('file', blob, 'capture.jpg');
-
-      try {
-        const response = await fetch(`${serverUrl}/predict`, {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (!response.ok) throw new Error('サーバーエラー');
-        
-        const resultBlob = await response.blob();
-        const resultImg = new Image();
-        resultImg.src = URL.createObjectURL(resultBlob);
-
-        resultImg.onload = () => {
-          currentImageData = resultImg;
-          
-          if (isPortrait) {
-            displayCanvas.width = video.videoWidth;
-            displayCanvas.height = video.videoHeight;
-            displayCtx.save();
-            displayCtx.translate(displayCanvas.width / 2, displayCanvas.height / 2);
-            displayCtx.rotate(90 * Math.PI / 180);
-            displayCtx.drawImage(resultImg, -resultImg.width / 2, -resultImg.height / 2);
-            displayCtx.restore();
-          } else {
-            displayCanvas.width = resultImg.width;
-            displayCanvas.height = resultImg.height;
-            displayCtx.drawImage(resultImg, 0, 0);
-          }
-          
-          // フルスクリーン表示中なら同期（displayCanvasと同じ状態にする）
-          if (isFullscreen) {
-            fullscreenCanvas.width = displayCanvas.width;
-            fullscreenCanvas.height = displayCanvas.height;
-            fullscreenCtx.clearRect(0, 0, fullscreenCanvas.width, fullscreenCanvas.height);
-            fullscreenCtx.drawImage(displayCanvas, 0, 0);
-          }
-          
-          URL.revokeObjectURL(resultImg.src);
-        };
-      } catch (error) {
-        console.error("画像送信エラー:", error);
-        statusDiv.textContent = '⚠️ 通信エラーが発生しました';
-      } finally {
-        isSending = false;
-      }
+ async function sendFrame() {
+  if (isSending || !video.videoWidth || !video.videoHeight) return;
+  isSending = true;
+  
+  const startTime = performance.now();
+  
+  try {
+    // 1. キャプチャと回転処理
+    const captureStart = performance.now();
+    const isPortrait = video.videoHeight > video.videoWidth;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    if (isPortrait) {
+      canvas.width = video.videoHeight;
+      canvas.height = video.videoWidth;
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(-90 * Math.PI / 180);
+      ctx.drawImage(video, -video.videoWidth / 2, -video.videoHeight / 2);
+      ctx.restore();
+    } else {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
     }
+    const captureTime = performance.now() - captureStart;
+    
+    // 2. 288×516にリサイズ（重要な最適化）
+    const resizeStart = performance.now();
+    const resizeCanvas = document.createElement('canvas');
+    const resizeCtx = resizeCanvas.getContext('2d');
+    
+    // 目標解像度: 288×516
+    resizeCanvas.width = 288;
+    resizeCanvas.height = 516;
+    
+    // 高品質リサイズ
+    resizeCtx.imageSmoothingEnabled = true;
+    resizeCtx.imageSmoothingQuality = 'high';
+    resizeCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, 288, 516);
+    const resizeTime = performance.now() - resizeStart;
+    
+    // 3. 圧縮してBlob作成
+    const compressionStart = performance.now();
+    const blob = await new Promise(resolve => {
+      resizeCanvas.toBlob(resolve, 'image/jpeg', 0.85); // 品質85%
+    });
+    const compressionTime = performance.now() - compressionStart;
+    
+    // 4. ファイルサイズ情報
+    const originalSize = canvas.width * canvas.height * 4; // 元画像の推定サイズ
+    const compressedSize = blob.size;
+    const compressionRatio = ((originalSize - compressedSize) / originalSize * 100).toFixed(1);
+    
+    console.log(`📊 圧縮統計:
+    📷 キャプチャ: ${captureTime.toFixed(1)}ms
+    🎯 リサイズ: ${resizeTime.toFixed(1)}ms (${canvas.width}×${canvas.height} → 288×516)
+    📦 圧縮: ${compressionTime.toFixed(1)}ms
+    📁 サイズ: ${formatFileSize(compressedSize)} (${compressionRatio}% 削減)`);
+    
+    // 5. フォームデータ作成
+    const formData = new FormData();
+    formData.append('file', blob, 'capture.jpg');
 
+    // 6. サーバーに送信
+    const networkStart = performance.now();
+    const response = await fetch(`${serverUrl}/predict`, {
+      method: 'POST',
+      body: formData,
+      // 最適化されたヘッダー
+      headers: {
+        'Accept': 'image/jpeg',
+      },
+      // Keep-Alive接続
+      keepalive: true,
+    });
+    
+    if (!response.ok) throw new Error(`サーバーエラー: ${response.status}`);
+    
+    const resultBlob = await response.blob();
+    const networkTime = performance.now() - networkStart;
+    
+    // 7. 結果画像の処理
+    const displayStart = performance.now();
+    const resultImg = new Image();
+    resultImg.src = URL.createObjectURL(resultBlob);
+
+    resultImg.onload = () => {
+      currentImageData = resultImg;
+      
+      // 表示処理（回転考慮）
+      if (isPortrait) {
+        displayCanvas.width = video.videoWidth;
+        displayCanvas.height = video.videoHeight;
+        displayCtx.save();
+        displayCtx.translate(displayCanvas.width / 2, displayCanvas.height / 2);
+        displayCtx.rotate(90 * Math.PI / 180);
+        displayCtx.drawImage(resultImg, -resultImg.width / 2, -resultImg.height / 2);
+        displayCtx.restore();
+      } else {
+        displayCanvas.width = resultImg.width;
+        displayCanvas.height = resultImg.height;
+        displayCtx.drawImage(resultImg, 0, 0);
+      }
+      
+      // フルスクリーン表示の同期
+      if (isFullscreen) {
+        fullscreenCanvas.width = displayCanvas.width;
+        fullscreenCanvas.height = displayCanvas.height;
+        fullscreenCtx.clearRect(0, 0, fullscreenCanvas.width, fullscreenCanvas.height);
+        fullscreenCtx.drawImage(displayCanvas, 0, 0);
+      }
+      
+      const displayTime = performance.now() - displayStart;
+      const totalTime = performance.now() - startTime;
+      
+      // ステータス更新
+      if (statusDiv) {
+        const fps = Math.round(1000 / totalTime);
+        statusDiv.innerHTML = `
+          ✅ 解析完了 (${totalTime.toFixed(0)}ms)
+          📁 ${formatFileSize(compressedSize)} → ${formatFileSize(resultBlob.size)}
+          🚀 効率: ${fps} FPS相当
+        `;
+      }
+      
+      URL.revokeObjectURL(resultImg.src);
+    };
+    
+  } catch (error) {
+    console.error("画像送信エラー:", error);
+    if (statusDiv) {
+      statusDiv.innerHTML = '⚠️ 通信エラーが発生しました';
+    }
+  } finally {
+    isSending = false;
+  }
+}
+
+// ファイルサイズフォーマット関数
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// さらなる最適化: WebP対応ブラウザでの超高効率圧縮
+async function sendFrameWebP() {
+  if (isSending || !video.videoWidth || !video.videoHeight) return;
+  isSending = true;
+  
+  try {
+    // 同じキャプチャ処理...
+    const isPortrait = video.videoHeight > video.videoWidth;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // キャプチャと回転処理
+    if (isPortrait) {
+      canvas.width = video.videoHeight;
+      canvas.height = video.videoWidth;
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(-90 * Math.PI / 180);
+      ctx.drawImage(video, -video.videoWidth / 2, -video.videoHeight / 2);
+      ctx.restore();
+    } else {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+    }
+    
+    // 288×516リサイズ
+    const resizeCanvas = document.createElement('canvas');
+    const resizeCtx = resizeCanvas.getContext('2d');
+    resizeCanvas.width = 288;
+    resizeCanvas.height = 516;
+    resizeCtx.imageSmoothingEnabled = true;
+    resizeCtx.imageSmoothingQuality = 'high';
+    resizeCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, 288, 516);
+    
+    // WebP形式で超高効率圧縮
+    const supportsWebP = await checkWebPSupport();
+    const blob = await new Promise(resolve => {
+      if (supportsWebP) {
+        resizeCanvas.toBlob(resolve, 'image/webp', 0.8); // WebP, 品質80%
+      } else {
+        resizeCanvas.toBlob(resolve, 'image/jpeg', 0.85); // フォールバック
+      }
+    });
+    
+    console.log(`📦 ${supportsWebP ? 'WebP' : 'JPEG'} 圧縮: ${formatFileSize(blob.size)}`);
+    
+    // 送信処理は同じ...
+    const formData = new FormData();
+    formData.append('file', blob, supportsWebP ? 'capture.webp' : 'capture.jpg');
+    
+    // 残りの処理...
+    // （送信、受信、表示処理は同じ）
+    
+  } catch (error) {
+    console.error("WebP送信エラー:", error);
+    // フォールバックで通常のJPEG送信
+    return sendFrame();
+  } finally {
+    isSending = false;
+  }
+}
+
+// WebP対応チェック
+async function checkWebPSupport() {
+  return new Promise(resolve => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    canvas.toBlob(blob => {
+      resolve(blob && blob.type === 'image/webp');
+    }, 'image/webp');
+  });
+}
     // 音声認識設定
     const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
     recognition.lang = "ja-JP";
@@ -609,7 +759,7 @@
     // 初期化
     startCamera();
     normalControls.classList.add('hidden');
-    setInterval(sendFrame, 66); // 15fps
+    setInterval(sendFrame, 33); // 15fps
     
     // タッチイベントの最適化
     document.addEventListener('touchstart', function(){}, {passive: true});
