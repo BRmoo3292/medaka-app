@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, HTTPException,Request,Body
+from fastapi import FastAPI, UploadFile, HTTPException,Request,Body,WebSocket
 from fastapi.responses import StreamingResponse,FileResponse
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,7 +69,25 @@ async def shutdown_event():
    global optimized_client
    if optimized_client:
        await optimized_client.aclose()
-       
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+   await websocket.accept()
+   
+   try:
+       while True:
+           data = await websocket.receive_bytes()
+           
+           response = await optimized_client.post(
+               f"{INFERENCE_SERVER_URL}/predict",
+               files={"file": ("image.jpg", io.BytesIO(data), "image/jpeg")}
+           )
+           
+           await websocket.send_bytes(response.content)
+               
+   except Exception as e:
+       print(f"WebSocket error: {e}")
+   finally:
+       await websocket.close()
 # Session Pooler対応のデータベース接続関数
 def connect_to_database(db_url, max_retries=3):
     #Supabase Session Pooler経由でデータベースに接続
@@ -485,25 +503,19 @@ async def predict(file: UploadFile):
    global latest_health, optimized_client
    
    total_start = time.time()
-   timestamps = {}
    
    try:
-       file_read_start = time.time()
        file_content = await file.read()
-       timestamps['file_read'] = (time.time() - file_read_start) * 1000
-       
        file_size_kb = len(file_content) / 1024
        
-       request_prep_start = time.time()
        files = {"file": (file.filename, io.BytesIO(file_content), file.content_type)}
-       timestamps['request_prep'] = (time.time() - request_prep_start) * 1000
        
        http_request_start = time.time()
        response = await optimized_client.post(
            f"{INFERENCE_SERVER_URL}/predict", 
            files=files
        )
-       timestamps['http_request'] = (time.time() - http_request_start) * 1000
+       http_time = (time.time() - http_request_start) * 1000
        
        if response.status_code != 200:
            raise HTTPException(status_code=response.status_code, 
@@ -512,22 +524,17 @@ async def predict(file: UploadFile):
        health_status = response.headers.get("X-Health-Status", "Unknown")
        latest_health = health_status
        
-       response_prep_start = time.time()
-       result = StreamingResponse(
+       total_time = (time.time() - total_start) * 1000
+       print(f"⏱️ TOTAL: {total_time:.1f}ms | HTTP: {http_time:.1f}ms | Size: {file_size_kb:.1f}KB")
+       
+       return StreamingResponse(
            io.BytesIO(response.content),
            media_type="image/jpeg"
        )
-       timestamps['response_prep'] = (time.time() - response_prep_start) * 1000
-       
-       total_time = (time.time() - total_start) * 1000
-       print(f"⏱️ TOTAL: {total_time:.1f}ms | HTTP: {timestamps['http_request']:.1f}ms | Size: {file_size_kb:.1f}KB")
-       
-       return result
           
    except Exception as e:
        print(f"💥 Error: {str(e)}")
        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-   
 @app.get("/")
 async def read_index():
     return FileResponse('index.html', media_type='text/html')
