@@ -380,7 +380,9 @@ async def talk_with_fish_text(request: Request):
         similar_example = await find_similar_conversation(user_input, current_stage)
         reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
         # 類似例を保存（次回の判定用）
-        if similar_example and 'child_reply_1_embedding' in similar_example:
+        if (similar_example and 
+            'child_reply_1_embedding' in similar_example and 
+            similar_example['distance'] < 0.5):
             session = ConversationSession(
                     profile_id = CURRENT_PROFILE_ID,
                     first_input = user_input,
@@ -389,9 +391,9 @@ async def talk_with_fish_text(request: Request):
                     current_stage = current_stage
             )
             active_session[CURRENT_PROFILE_ID] = session
-            print("[セッション] セッション作成完了 - 次回判定実行予定")
+            print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
         else:
-            print("[セッション] 類似例なし - 通常の会話として処理")
+            print(f"[セッション] 類似度が低い（{similar_example['distance']:.4f} >= 0.5）- 通常の会話として処理")
     else:
         #2回目の会話の場合、発達段階判定を実行
         print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
@@ -461,15 +463,12 @@ async def talk_with_fish_text(request: Request):
     return FileResponse(tts_path, media_type="audio/mpeg", filename="reply.mp3")
 
 
-
 @app.post("/predict")
 async def predict(file: UploadFile):
    global latest_health
-   
    # 全体の開始時間
    total_start = time.time()
    timestamps = {}
-   
    try:
        # 1. ファイル読み込み時間測定
        file_read_start = time.time()
@@ -584,6 +583,86 @@ async def read_index():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+def get_proactive_medaka_message(conversation_count, profile):
+    """会話回数に応じてメダカからのプロアクティブメッセージを生成"""
+    
+    # 全ステージ共通のメッセージパターン
+    messages = {
+        0: ["はじめまして！僕、きんちゃんだよ〜君の名前はなんて言うの？", "やっほー！僕とお話ししない？", "今日の君は、どんな一日だった？僕はね、水草のベッドでお昼寝してたんだよ"],
+        1: ["こんにちは！きょうは何をして遊んだの？ ぼくはね、水の中でゆらゆら揺れるのが好きだよ。", "ひまだよ〜!一緒にお話ししよ！","今何してるの？僕はね、のんびり泳いでるよ〜"],
+        2: ["また会えて嬉しいな〜、お話ししよ", "はじめまして！これから君と、いーっぱいお話ししたいな。まずは、君の好きなものを教えてくれる？","君のこと教えてほしいな！お名前は？"],
+        3: ["やっほー！", "ねえねえ、聞こえる？ガラス越しだけど、はじめまして！これから、いーっぱいお話ししようね！", "こんにちは！僕、きんちゃんだよ〜君の名前はなんて言うの？"],
+        4: ["何か気になることある？", "一緒にお話しない？", "お話聞かせて〜"]
+    }
+    
+    # 会話回数に応じてメッセージを選択（最大4まで）
+    stage_key = min(conversation_count, 4)
+    
+    import random
+    return random.choice(messages[stage_key])    
+# セッション状態確認エンドポイント
+@app.post("/check_session_status")
+async def check_session_status(request: Request):
+    data = await request.json()
+    profile_id = data.get("profile_id")
+    
+    if not profile_id:
+        raise HTTPException(400, "profile_id is required")
+    
+    # アクティブセッションがあるかチェック
+    has_active_session = profile_id in active_session
+    
+    return {
+        "has_active_session": has_active_session,
+        "conversation_count": len(conversation_history.get(profile_id, []))
+    }
+
+# プロアクティブメッセージ生成エンドポイント
+@app.post("/get_proactive_message")
+async def get_proactive_message(request: Request):
+    data = await request.json()
+    profile_id = data.get("profile_id")
+    
+    if not profile_id:
+        raise HTTPException(400, "profile_id is required")
+    
+    # プロファイル取得
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT * FROM profiles WHERE id = %s;", (profile_id,))
+        profile = cur.fetchone()
+        if not profile:
+            raise HTTPException(404, "Profile not found")
+    
+    # 会話回数を取得
+    conversation_count = len(conversation_history.get(profile_id, []))
+    
+    # プロアクティブメッセージを生成
+    message = get_proactive_medaka_message(conversation_count, profile)
+    
+    # TTS生成
+    async with openai_client.audio.speech.with_streaming_response.create(
+        model="gpt-4o-mini-tts",
+        voice="coral",
+        instructions="""
+        Voice Affect:のんびりしていて、かわいらしい無邪気さ  
+        Tone:ほんわか、少しおっとり、親しみやすい  
+        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+        Pronunciation:語尾はやわらかく、やや伸ばし気味に（例：「ねぇ〜」「だよぉ〜」）  
+        Pauses:語尾や会話の区切りで軽く間をとる  
+        Dialect:標準語だが、子どもっぽいやさしい言い回し  
+        Delivery:おっとりしていて、聞いていてほっとするような声  
+        Phrasing:たまにちょっとズレた発言も混ぜる。例：「お空って、水のうえにあるの？」
+        """,
+        speed=1.0,
+        input=message,
+        response_format="mp3",
+    ) as response:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
+            async for chunk in response.iter_bytes():
+                tts_file.write(chunk)
+            tts_path = tts_file.name
+    
+    return FileResponse(tts_path, media_type="audio/mpeg", filename="proactive_reply.mp3")
 
 #--------デバック用エンドポイント--------
 @app.get("/conversation_history")

@@ -316,346 +316,345 @@
   </div>
   
   <audio id="replyAudio" autoplay></audio>
-
   <script>
-    const video = document.getElementById('video');
-    const displayCanvas = document.getElementById('displayCanvas');
-    const fullscreenCanvas = document.getElementById('fullscreenCanvas');
-    const displayCtx = displayCanvas.getContext('2d');
-    const fullscreenCtx = fullscreenCanvas.getContext('2d');
-    //const serverUrl = "https://192.168.137.121:8000"; // ← 適宜変更
-    const serverUrl =  window.location.origin; // ← 適宜変更
-    //uvicorn fish_web:app --host 0.0.0.0 --port 8000 --ssl-keyfile=172.20.10.6-key.pem --ssl-certfile=172.20.10.6.pem
-    //uvicorn fish_web:app --host 0.0.0.0 --port 8000 --ssl-keyfile=172.20.10.6-key.pem --ssl-certfile=172.20.10.6.pem
-    //uvicorn fish_web:app --host 0.0.0.0 --port 8000 --ssl-keyfile=192.168.3.16-key.pem --ssl-certfile=192.168.3.16.pem
-    //uvicorn fish_web:app --host 0.0.0.0 --port 8000 --ssl-keyfile=192.168.0.148-key.pem --ssl-certfile=192.168.0.148.pem
-    //48:8000";
+
+// 設定・定数
+const CONFIG = {
+    SERVER_URL: window.location.origin,
+    FRAME_RATE: 33, // 15fps (1000ms / 30fps ≈ 33ms)
+    IMAGE_QUALITY: 0.8,
+    PROFILE_ID: 1 // デモ用
+};
+
+
+// DOM要素の取得
+
+const elements = {
+    // 動画・キャンバス関連
+    video: document.getElementById('video'),
+    displayCanvas: document.getElementById('displayCanvas'),
+    fullscreenCanvas: document.getElementById('fullscreenCanvas'),
     
-    const replyAudio = document.getElementById("replyAudio");
-    const statusDiv = document.getElementById("status");
-    const canvasFullscreenBtn = document.getElementById("canvasFullscreenBtn");
-    const fullscreenContainer = document.getElementById("fullscreenContainer");
-    const canvasContainer = document.getElementById("canvasContainer");
+    // オーディオ・ステータス
+    replyAudio: document.getElementById("replyAudio"),
+    statusDiv: document.getElementById("status"),
     
-    // ボタン要素
-    const startButton = document.getElementById("startButton");
-    const normalControls = document.getElementById("normalControls");
-    const normalRecordBtn = document.getElementById("normalRecordBtn");
-    const normalStopBtn = document.getElementById("normalStopBtn");
-    const recordBtn = document.getElementById("recordBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const exitBtn = document.getElementById("exitBtn");
+    // フルスクリーン関連
+    canvasFullscreenBtn: document.getElementById("canvasFullscreenBtn"),
+    fullscreenContainer: document.getElementById("fullscreenContainer"),
+    canvasContainer: document.getElementById("canvasContainer"),
     
-    let isFullscreen = false;
-    let currentImageData = null;
-    let isRecording = false;
-    let shouldRestart = true;
-    
-    // フルスクリーン管理
-    function enterFullscreen() {
-      isFullscreen = true;
-      fullscreenContainer.classList.remove('hidden');
-      document.body.style.overflow = 'hidden';
-      canvasFullscreenBtn.textContent = '📱 戻る';
-      
-      // 現在の画像をフルスクリーンキャンバスにコピー（回転なし）
-      if (currentImageData) {
-        fullscreenCanvas.width = displayCanvas.width;
-        fullscreenCanvas.height = displayCanvas.height;
-        fullscreenCtx.clearRect(0, 0, fullscreenCanvas.width, fullscreenCanvas.height);
-        fullscreenCtx.drawImage(displayCanvas, 0, 0);
-      }
-    }
-    
-    function exitFullscreen() {
-      isFullscreen = false;
-      fullscreenContainer.classList.add('hidden');
-      document.body.style.overflow = 'auto';
-      canvasFullscreenBtn.textContent = '🔍 拡大';
-    }
-    
-    function drawImageToCanvas(canvas, ctx, imageData) {
-      canvas.width = imageData.width;
-      canvas.height = imageData.height;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(imageData, 0, 0);
-    }
-    
-    // イベントリスナー
-    canvasFullscreenBtn.addEventListener('click', () => {
-      if (isFullscreen) {
-        exitFullscreen();
-      } else {
-        enterFullscreen();
-      }
-    });
-    
-    displayCanvas.addEventListener('click', () => {
-      if (!isFullscreen) {
-        enterFullscreen();
-      }
-    });
-    
-    exitBtn.addEventListener('click', exitFullscreen);
-    
-    // 録音制御
-    function startRecording() {
-      if (!isRecording && shouldRestart) {
-        isRecording = true;
-        recognition.start();
-        updateRecordingUI(true);
-      }
-    }
-    
-    function stopRecording() {
-      if (isRecording) {
-        isRecording = false;
-        shouldRestart = false;
-        recognition.stop();
-        updateRecordingUI(false);
-      }
-    }
-    
-    function updateRecordingUI(recording) {
-      const buttons = [normalRecordBtn, recordBtn];
-      buttons.forEach(btn => {
-        if (recording) {
-          btn.classList.add('recording');
-        } else {
-          btn.classList.remove('recording');
+    // ボタン類
+    startButton: document.getElementById("startButton"),
+    normalControls: document.getElementById("normalControls"),
+    normalRecordBtn: document.getElementById("normalRecordBtn"),
+    normalStopBtn: document.getElementById("normalStopBtn"),
+    recordBtn: document.getElementById("recordBtn"),
+    stopBtn: document.getElementById("stopBtn"),
+    exitBtn: document.getElementById("exitBtn")
+};
+
+// キャンバスコンテキストの取得
+const displayCtx = elements.displayCanvas.getContext('2d');
+const fullscreenCtx = elements.fullscreenCanvas.getContext('2d');
+
+// グローバル状態管理
+
+const appState = {
+    isFullscreen: false,
+    currentImageData: null,
+    isRecording: false,
+    shouldRestart: true,
+    isSending: false
+};
+
+// カメラ機能
+const cameraModule = {
+    async startCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { 
+                    facingMode: "environment",
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+            });
+            elements.video.srcObject = stream;
+        } catch (err) {
+            elements.statusDiv.textContent = '⚠️ カメラへのアクセスが拒否されました';
+            console.error('Camera error:', err);
         }
-      });
     }
-    
-    // 録音ボタンのイベントリスナー
-    [normalRecordBtn, recordBtn].forEach(btn => {
-      btn.addEventListener('click', startRecording);
-    });
-    
-    [normalStopBtn, stopBtn].forEach(btn => {
-      btn.addEventListener('click', stopRecording);
-    });
-    
-    // カメラ起動
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { 
-            facingMode: "environment",
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          }
-        });
-        video.srcObject = stream;
-      } catch (err) {
-        statusDiv.textContent = '⚠️ カメラへのアクセスが拒否されました';
-        console.error('Camera error:', err);
-      }
-    }
-    
-    let isSending = false;
-    
-    // フレーム送信
-// WebSocket接続
-let ws = null;
-let wsConnected = false;
+};
 
-// WebSocket初期化
-function initWebSocket() {
-  const wsUrl = serverUrl.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
-  ws = new WebSocket(wsUrl);
-  
-  ws.onopen = () => {
-    wsConnected = true;
-    console.log('WebSocket接続');
-  };
-  
-  ws.onmessage = (event) => {
-    const resultImg = new Image();
-    resultImg.src = URL.createObjectURL(event.data);
-    
-    resultImg.onload = () => {
-      currentImageData = resultImg;
-      displayCanvas.width = 516;
-      displayCanvas.height = 288;
-      displayCtx.drawImage(resultImg, 0, 0, 516, 288);
-      
-      if (isFullscreen) {
-        fullscreenCanvas.width = 516;
-        fullscreenCanvas.height = 288;
-        fullscreenCtx.clearRect(0, 0, 516, 288);
-        fullscreenCtx.drawImage(displayCanvas, 0, 0);
-      }
-      
-      URL.revokeObjectURL(resultImg.src);
-      isSending = false;
-    };
-  };
-  
-  ws.onclose = () => {
-    wsConnected = false;
-    setTimeout(initWebSocket, 1000);
-  };
-}
 
-// WebSocket送信
-async function sendFrame() {
-  if (isSending || !video.videoWidth || !video.videoHeight) return;
-  
-  if (!wsConnected) {
-    return sendFrameHTTP();
-  }
-  
-  isSending = true;
-  
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  canvas.width = 516;
-  canvas.height = 288;
-  ctx.drawImage(video, 0, 0, 516, 288);
-  
-  canvas.toBlob(blob => {
-    ws.send(blob);
-  }, 'image/jpeg', 0.8);
-}
 
-// HTTPフォールバック
-async function sendFrameHTTP() {
-  if (isSending) return;
-  isSending = true;
+// 音声認識機能
+const speechModule = {
+    recognition: null,
 
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  canvas.width = 516;
-  canvas.height = 288;
-  ctx.drawImage(video, 0, 0, 516, 288);
-
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
-  const formData = new FormData();
-  formData.append('file', blob, 'capture.jpg');
-
-  try {
-    const response = await fetch(`${serverUrl}/predict`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) throw new Error('サーバーエラー');
-
-    const resultBlob = await response.blob();
-    const resultImg = new Image();
-    resultImg.src = URL.createObjectURL(resultBlob);
-
-    resultImg.onload = () => {
-      currentImageData = resultImg;
-      displayCanvas.width = 516;
-      displayCanvas.height = 288;
-      displayCtx.drawImage(resultImg, 0, 0, 516, 288);
-
-      if (isFullscreen) {
-        fullscreenCanvas.width = 516;
-        fullscreenCanvas.height = 288;
-        fullscreenCtx.clearRect(0, 0, 516, 288);
-        fullscreenCtx.drawImage(displayCanvas, 0, 0);
-      }
-
-      URL.revokeObjectURL(resultImg.src);
-    };
-  } catch (error) {
-    console.error("画像送信エラー:", error);
-    statusDiv.textContent = '⚠️ 通信エラーが発生しました';
-  } finally {
-    isSending = false;
-  }
-}
-
-// 初期化実行
-initWebSocket();
-    // 音声認識設定
-    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.lang = "ja-JP";
-    recognition.interimResults = false;
-    recognition.continuous = false;
-    
-    recognition.onstart = () => {
-      statusDiv.textContent = "🎤 聞いています...";
-      isRecording = true;
-      updateRecordingUI(true);
-    };
-
-    recognition.onresult = async (event) => {
-      shouldRestart = true;
-      isRecording = false;
-      updateRecordingUI(false);
-      
-      const transcript = event.results[0][0].transcript;
-      statusDiv.textContent = `🗣️ あなた: ${transcript}`;
-      let currentProfileId = 1;  // デモ用
-      try {
-        const response = await fetch(`${serverUrl}/talk_with_fish_text`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-          user_input: transcript,
-          profile_id: currentProfileId  // ← 追加
-  })
-        });
+    init() {
+        this.recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        this.recognition.lang = "ja-JP";
+        this.recognition.interimResults = false;
+        this.recognition.continuous = false;
         
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        replyAudio.src = audioUrl;
-        replyAudio.play();
-        
-        replyAudio.onended = () => {
-          statusDiv.textContent = "🎤 音声入力 待機中...";
-          setTimeout(() => {
-            if (shouldRestart && !isRecording) {
-              // 自動再開はせず、ユーザーの操作を待つ
-            }
-          }, 1000);
+        this.setupEventListeners();
+    },
+
+    setupEventListeners() {
+        this.recognition.onstart = () => {
+            elements.statusDiv.textContent = "🎤 聞いています...";
+            appState.isRecording = true;
+            this.updateRecordingUI(true);
         };
-      } catch (error) {
-        console.error("音声送信エラー:", error);
-        statusDiv.textContent = '⚠️ 音声処理エラーが発生しました';
-      }
-    };
 
-    recognition.onerror = (event) => {
-      isRecording = false;
-      updateRecordingUI(false);
-      statusDiv.textContent = "⚠️ 音声エラー: " + event.error;
-      shouldRestart = true;
-    };
-    
-    recognition.onend = () => {
-      isRecording = false;
-      updateRecordingUI(false);
-      if (!shouldRestart) {
-        statusDiv.textContent = "🎤 音声入力 待機中...";
-      }
-    };
+        this.recognition.onresult = async (event) => {
+            appState.shouldRestart = true;
+            appState.isRecording = false;
+            this.updateRecordingUI(false);
+            
+            const transcript = event.results[0][0].transcript;
+            elements.statusDiv.textContent = `🗣️ あなた: ${transcript}`;
+            
+            await this.sendTextToServer(transcript);
+        };
 
-    // 開始ボタンのイベントリスナー
-    startButton.addEventListener("click", () => {
-      replyAudio.src = "";
-      replyAudio.load();
-      
-      setTimeout(() => {
-        shouldRestart = true;
-        startButton.classList.add('hidden');
-        normalControls.classList.remove('hidden');
-        statusDiv.textContent = "🎤 録音ボタンを押して話しかけてください";
-      }, 500);
-    });
+        this.recognition.onerror = (event) => {
+            appState.isRecording = false;
+            this.updateRecordingUI(false);
+            elements.statusDiv.textContent = "🐟 メダカにお話ししてね！";
+            appState.shouldRestart = true;
+            
+            // エラー後、自動で録音を再開（3秒後）
+            setTimeout(() => {
+                if (appState.shouldRestart && !appState.isRecording) {
+                    console.log("[音声エラー] 自動録音再開");
+                    this.startDirectRecording();
+                }
+            }, 3000);
+        };
+        this.recognition.onend = () => {
+            appState.isRecording = false;
+            this.updateRecordingUI(false);
+            if (!appState.shouldRestart) {
+                elements.statusDiv.textContent = "🎤 音声入力 待機中...";
+            }
+        };
+    },
 
-    // 初期化
-    startCamera();
-    normalControls.classList.add('hidden');
-    setInterval(sendFrame, 33); // 15fps
-    
-    // タッチイベントの最適化
-    document.addEventListener('touchstart', function(){}, {passive: true});
-    document.addEventListener('touchmove', function(){}, {passive: true});
+    async sendTextToServer(transcript) {
+        try {
+            const response = await fetch(`${CONFIG.SERVER_URL}/talk_with_fish_text`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_input: transcript,
+                    profile_id: CONFIG.PROFILE_ID
+                })
+            });
+            
+            const audioBlob = await response.blob();
+            const audioUrl = URL.createObjectURL(audioBlob);
+            elements.replyAudio.src = audioUrl;
+            elements.replyAudio.play();
+            
+            elements.replyAudio.onended = () => {
+                elements.statusDiv.textContent = "🎤 音声入力 待機中...";
+                setTimeout(() => {
+                    if (appState.shouldRestart && !appState.isRecording) {
+                        // 自動再開はせず、ユーザーの操作を待つ
+                    }
+                }, 1000);
+            };
+        } catch (error) {
+            console.error("音声送信エラー:", error);
+            elements.statusDiv.textContent = '⚠️ 音声処理エラーが発生しました';
+        }
+    },
+
+    // セッション状態をチェックして録音開始の処理を分岐
+    async startRecording() {
+        if (!appState.isRecording && appState.shouldRestart) {
+            try {
+                // セッション状態を確認
+                const sessionResponse = await fetch(`${CONFIG.SERVER_URL}/check_session_status`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ profile_id: CONFIG.PROFILE_ID })
+                });
+                
+                const sessionData = await sessionResponse.json();
+                
+                if (sessionData.has_active_session) {
+                    // 2回目の会話フロー - 直接録音開始
+                    console.log("[録音] 2回目フロー - 直接録音開始");
+                    this.startDirectRecording();
+                } else {
+                    // 1回目の会話フロー - メダカから話しかけてから録音
+                    console.log("[録音] 1回目フロー - メダカから話しかけ");
+                    await this.startWithMedakaGreeting();
+                }
+            } catch (error) {
+                console.error("セッション状態確認エラー:", error);
+                // エラーの場合は直接録音開始
+                this.startDirectRecording();
+            }
+        }
+    },
+
+    // 直接録音を開始
+    startDirectRecording() {
+        appState.isRecording = true;
+        this.recognition.start();
+        this.updateRecordingUI(true);
+    },
+
+    // メダカの挨拶から始める録音
+    async startWithMedakaGreeting() {
+        try {
+            elements.statusDiv.textContent = "🐟 メダカが話しかけています...";
+            
+            // メダカからの挨拶を取得
+            const greetingResponse = await fetch(`${CONFIG.SERVER_URL}/get_proactive_message`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ profile_id: CONFIG.PROFILE_ID })
+            });
+            
+            const greetingBlob = await greetingResponse.blob();
+            const greetingUrl = URL.createObjectURL(greetingBlob);
+            elements.replyAudio.src = greetingUrl;
+            
+            await elements.replyAudio.play();
+            
+            // メダカの発話が終わったら録音開始
+            elements.replyAudio.onended = () => {
+                elements.statusDiv.textContent = "🎤 メダカが話しかけたよ。お返事してね！";
+                setTimeout(() => {
+                    this.startDirectRecording();
+                }, 1000);
+            };
+            
+        } catch (error) {
+            console.error("メダカ挨拶エラー:", error);
+            // エラーの場合は直接録音開始
+            this.startDirectRecording();
+        }
+    },
+
+    stopRecording() {
+        if (appState.isRecording) {
+            appState.isRecording = false;
+            appState.shouldRestart = false;
+            this.recognition.stop();
+            this.updateRecordingUI(false);
+        }
+    },
+
+    updateRecordingUI(recording) {
+        const buttons = [elements.normalRecordBtn, elements.recordBtn];
+        buttons.forEach(btn => {
+            if (recording) {
+                btn.classList.add('recording');
+            } else {
+                btn.classList.remove('recording');
+            }
+        });
+    }
+};
+// フルスクリーン機能
+const fullscreenModule = {
+    enterFullscreen() {
+        appState.isFullscreen = true;
+        elements.fullscreenContainer.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        elements.canvasFullscreenBtn.textContent = '📱 戻る';
+        
+        // 現在の画像をフルスクリーンキャンバスにコピー
+        if (appState.currentImageData) {
+            elements.fullscreenCanvas.width = elements.displayCanvas.width;
+            elements.fullscreenCanvas.height = elements.displayCanvas.height;
+            fullscreenCtx.clearRect(0, 0, elements.fullscreenCanvas.width, elements.fullscreenCanvas.height);
+            fullscreenCtx.drawImage(elements.displayCanvas, 0, 0);
+        }
+    },
+
+    exitFullscreen() {
+        appState.isFullscreen = false;
+        elements.fullscreenContainer.classList.add('hidden');
+        document.body.style.overflow = 'auto';
+        elements.canvasFullscreenBtn.textContent = '🔍 拡大';
+    },
+
+    setupEventListeners() {
+        elements.canvasFullscreenBtn.addEventListener('click', () => {
+            if (appState.isFullscreen) {
+                this.exitFullscreen();
+            } else {
+                this.enterFullscreen();
+            }
+        });
+
+        elements.displayCanvas.addEventListener('click', () => {
+            if (!appState.isFullscreen) {
+                this.enterFullscreen();
+            }
+        });
+
+        elements.exitBtn.addEventListener('click', () => this.exitFullscreen());
+    }
+};
+// UI制御機能
+const uiModule = {
+    setupRecordingButtons() {
+        // 録音開始ボタン
+        [elements.normalRecordBtn, elements.recordBtn].forEach(btn => {
+            btn.addEventListener('click', () => speechModule.startRecording());
+        });
+        // 録音停止ボタン
+        [elements.normalStopBtn, elements.stopBtn].forEach(btn => {
+            btn.addEventListener('click', () => speechModule.stopRecording());
+        });
+    },
+    setupStartButton() {
+        elements.startButton.addEventListener("click", () => {
+            elements.replyAudio.src = "";
+            elements.replyAudio.load();
+            setTimeout(() => {
+                appState.shouldRestart = true;
+                elements.startButton.classList.add('hidden');
+                elements.normalControls.classList.remove('hidden');
+                elements.statusDiv.textContent = "🎤 録音ボタンを押して話しかけてください";
+            }, 500);
+        });
+    }
+};
+// アプリケーション初期化・メイン処理
+const app = {
+    async init() {
+        // 初期UI状態の設定
+        elements.normalControls.classList.add('hidden');
+        // 各モジュールの初期化
+        await cameraModule.startCamera();
+        speechModule.init();
+        fullscreenModule.setupEventListeners();
+        uiModule.setupRecordingButtons();
+        uiModule.setupStartButton();
+        // フレーム送信の定期実行
+        setInterval(() => imageModule.sendFrame(), CONFIG.FRAME_RATE);
+        // タッチイベントの最適化
+        this.optimizeTouchEvents();
+        console.log('🐠 魚認識アプリが初期化されました');
+    },
+
+    optimizeTouchEvents() {
+        document.addEventListener('touchstart', function(){}, {passive: true});
+        document.addEventListener('touchmove', function(){}, {passive: true});
+    }
+};
+// アプリケーション起動
+app.init();
   </script>
 </body>
 </html>
