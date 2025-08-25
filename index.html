@@ -387,8 +387,102 @@ const cameraModule = {
     }
 };
 
+// 画像処理・送信機能
+const imageModule = {
+    async sendFrame() {
+        if (appState.isSending || !elements.video.videoWidth || !elements.video.videoHeight) return;
+        
+        appState.isSending = true;
+        
+        try {
+            const processedBlob = this.captureAndProcessVideo();
+            const resultBlob = await this.sendToServer(processedBlob);
+            await this.displayResult(resultBlob);
+        } catch (error) {
+            console.error("画像送信エラー:", error);
+            elements.statusDiv.textContent = '⚠️ 通信エラーが発生しました';
+        } finally {
+            appState.isSending = false;
+        }
+    },
 
+    captureAndProcessVideo() {
+        const isPortrait = elements.video.videoHeight > elements.video.videoWidth;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        if (isPortrait) {
+            canvas.width = elements.video.videoHeight;
+            canvas.height = elements.video.videoWidth;
+            ctx.save();
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.rotate(-90 * Math.PI / 180);
+            ctx.drawImage(elements.video, -elements.video.videoWidth / 2, -elements.video.videoHeight / 2);
+            ctx.restore();
+        } else {
+            canvas.width = elements.video.videoWidth;
+            canvas.height = elements.video.videoHeight;
+            ctx.drawImage(elements.video, 0, 0);
+        }
+        
+        return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', CONFIG.IMAGE_QUALITY));
+    },
 
+    async sendToServer(blob) {
+        const formData = new FormData();
+        formData.append('file', blob, 'capture.jpg');
+        
+        const response = await fetch(`${CONFIG.SERVER_URL}/predict`, {
+            method: 'POST',
+            body: formData,
+        });
+        
+        if (!response.ok) throw new Error('サーバーエラー');
+        
+        return await response.blob();
+    },
+
+    async displayResult(resultBlob) {
+        const resultImg = new Image();
+        const imageUrl = URL.createObjectURL(resultBlob);
+        
+        return new Promise((resolve) => {
+            resultImg.onload = () => {
+                appState.currentImageData = resultImg;
+                this.updateCanvases(resultImg);
+                URL.revokeObjectURL(imageUrl);
+                resolve();
+            };
+            resultImg.src = imageUrl;
+        });
+    },
+
+    updateCanvases(resultImg) {
+        const isPortrait = elements.video.videoHeight > elements.video.videoWidth;
+        
+        if (isPortrait) {
+            elements.displayCanvas.width = elements.video.videoWidth;
+            elements.displayCanvas.height = elements.video.videoHeight;
+            displayCtx.save();
+            displayCtx.translate(elements.displayCanvas.width / 2, elements.displayCanvas.height / 2);
+            displayCtx.rotate(90 * Math.PI / 180);
+            displayCtx.drawImage(resultImg, -resultImg.width / 2, -resultImg.height / 2);
+            displayCtx.restore();
+        } else {
+            elements.displayCanvas.width = resultImg.width;
+            elements.displayCanvas.height = resultImg.height;
+            displayCtx.drawImage(resultImg, 0, 0);
+        }
+        
+        // フルスクリーン表示中なら同期
+        if (appState.isFullscreen) {
+            elements.fullscreenCanvas.width = elements.displayCanvas.width;
+            elements.fullscreenCanvas.height = elements.displayCanvas.height;
+            fullscreenCtx.clearRect(0, 0, elements.fullscreenCanvas.width, elements.fullscreenCanvas.height);
+            fullscreenCtx.drawImage(elements.displayCanvas, 0, 0);
+        }
+    }
+};
 // 音声認識機能
 const speechModule = {
     recognition: null,
