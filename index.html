@@ -395,7 +395,7 @@ const imageModule = {
         appState.isSending = true;
         
         try {
-            const processedBlob = this.captureAndProcessVideo();
+            const processedBlob = await this.captureAndProcessVideo();
             const resultBlob = await this.sendToServer(processedBlob);
             await this.displayResult(resultBlob);
         } catch (error) {
