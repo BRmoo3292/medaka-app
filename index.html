@@ -359,13 +359,14 @@ const displayCtx = elements.displayCanvas.getContext('2d');
 const fullscreenCtx = elements.fullscreenCanvas.getContext('2d');
 
 // グローバル状態管理
-
 const appState = {
     isFullscreen: false,
     currentImageData: null,
     isRecording: false,
     shouldRestart: true,
-    isSending: false
+    isSending: false,
+    ws: null,
+    wsConnected: false
 };
 
 // カメラ機能
@@ -387,6 +388,83 @@ const cameraModule = {
     }
 };
 
+// WebSocket接続機能
+const websocketModule = {
+    init() {
+        this.connect();
+    },
+
+    connect() {
+        const wsUrl = CONFIG.SERVER_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
+        appState.ws = new WebSocket(wsUrl);
+        
+        appState.ws.onopen = () => {
+            appState.wsConnected = true;
+            console.log('WebSocket接続完了');
+        };
+        
+        appState.ws.onmessage = (event) => {
+            this.handleMessage(event);
+        };
+        
+        appState.ws.onclose = () => {
+            appState.wsConnected = false;
+            console.log('WebSocket接続が切断されました。再接続を試行します...');
+            setTimeout(() => this.connect(), 1000);
+        };
+
+        appState.ws.onerror = (error) => {
+            console.error('WebSocket エラー:', error);
+        };
+    },
+
+    handleMessage(event) {
+        const resultImg = new Image();
+        const imageUrl = URL.createObjectURL(event.data);
+        
+        resultImg.onload = () => {
+            appState.currentImageData = resultImg;
+            
+            // 固定サイズで表示
+            elements.displayCanvas.width = 516;
+            elements.displayCanvas.height = 288;
+            displayCtx.drawImage(resultImg, 0, 0, 516, 288);
+            
+            // フルスクリーン表示中なら同期
+            if (appState.isFullscreen) {
+                elements.fullscreenCanvas.width = 516;
+                elements.fullscreenCanvas.height = 288;
+                fullscreenCtx.clearRect(0, 0, 516, 288);
+                fullscreenCtx.drawImage(elements.displayCanvas, 0, 0);
+            }
+            
+            URL.revokeObjectURL(imageUrl);
+            appState.isSending = false;
+        };
+        
+        resultImg.src = imageUrl;
+    },
+
+    sendFrame() {
+        if (!appState.ws || appState.ws.readyState !== WebSocket.OPEN) {
+            return false; // WebSocket使用不可
+        }
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 516;
+        canvas.height = 288;
+        ctx.drawImage(elements.video, 0, 0, 516, 288);
+        
+        canvas.toBlob(blob => {
+            if (appState.ws && appState.ws.readyState === WebSocket.OPEN) {
+                appState.ws.send(blob);
+            }
+        }, 'image/jpeg', CONFIG.IMAGE_QUALITY);
+
+        return true; // WebSocket送信成功
+    }
+};
 // 画像処理・送信機能
 const imageModule = {
     async sendFrame() {
@@ -395,40 +473,49 @@ const imageModule = {
         appState.isSending = true;
         
         try {
-            const processedBlob = await this.captureAndProcessVideo();
-            const resultBlob = await this.sendToServer(processedBlob);
-            await this.displayResult(resultBlob);
+            // WebSocket優先、失敗時はHTTPにフォールバック
+            if (appState.wsConnected) {
+                const success = websocketModule.sendFrame();
+                if (success) return; // WebSocket送信成功
+            }
+            
+            // HTTPフォールバック
+            await this.sendFrameHTTP();
         } catch (error) {
             console.error("画像送信エラー:", error);
             elements.statusDiv.textContent = '⚠️ 通信エラーが発生しました';
         } finally {
-            appState.isSending = false;
+            // WebSocket使用時はhandleMessageでisSendingをfalseにする
+            if (!appState.wsConnected) {
+                appState.isSending = false;
+            }
         }
     },
 
-    captureAndProcessVideo() {
-        const isPortrait = elements.video.videoHeight > elements.video.videoWidth;
+    async sendFrameHTTP() {
+        const processedBlob = await this.captureAndProcessVideo();
+        const resultBlob = await this.sendToServer(processedBlob);
+        await this.displayResult(resultBlob);
+    },
+
+    async captureAndProcessVideo() {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
-        if (isPortrait) {
-            canvas.width = elements.video.videoHeight;
-            canvas.height = elements.video.videoWidth;
-            ctx.save();
-            ctx.translate(canvas.width / 2, canvas.height / 2);
-            ctx.rotate(-90 * Math.PI / 180);
-            ctx.drawImage(elements.video, -elements.video.videoWidth / 2, -elements.video.videoHeight / 2);
-            ctx.restore();
-        } else {
-            canvas.width = elements.video.videoWidth;
-            canvas.height = elements.video.videoHeight;
-            ctx.drawImage(elements.video, 0, 0);
-        }
+        // HTTPフォールバック用は固定サイズ
+        canvas.width = 516;
+        canvas.height = 288;
+        ctx.drawImage(elements.video, 0, 0, 516, 288);
         
         return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', CONFIG.IMAGE_QUALITY));
     },
 
     async sendToServer(blob) {
+        // Blobの検証を追加
+        if (!blob || !(blob instanceof Blob)) {
+            throw new Error('有効なBlobが生成されませんでした');
+        }
+        
         const formData = new FormData();
         formData.append('file', blob, 'capture.jpg');
         
@@ -458,27 +545,16 @@ const imageModule = {
     },
 
     updateCanvases(resultImg) {
-        const isPortrait = elements.video.videoHeight > elements.video.videoWidth;
-        
-        if (isPortrait) {
-            elements.displayCanvas.width = elements.video.videoWidth;
-            elements.displayCanvas.height = elements.video.videoHeight;
-            displayCtx.save();
-            displayCtx.translate(elements.displayCanvas.width / 2, elements.displayCanvas.height / 2);
-            displayCtx.rotate(90 * Math.PI / 180);
-            displayCtx.drawImage(resultImg, -resultImg.width / 2, -resultImg.height / 2);
-            displayCtx.restore();
-        } else {
-            elements.displayCanvas.width = resultImg.width;
-            elements.displayCanvas.height = resultImg.height;
-            displayCtx.drawImage(resultImg, 0, 0);
-        }
+        // HTTPフォールバック時は固定サイズで表示
+        elements.displayCanvas.width = 516;
+        elements.displayCanvas.height = 288;
+        displayCtx.drawImage(resultImg, 0, 0, 516, 288);
         
         // フルスクリーン表示中なら同期
         if (appState.isFullscreen) {
-            elements.fullscreenCanvas.width = elements.displayCanvas.width;
-            elements.fullscreenCanvas.height = elements.displayCanvas.height;
-            fullscreenCtx.clearRect(0, 0, elements.fullscreenCanvas.width, elements.fullscreenCanvas.height);
+            elements.fullscreenCanvas.width = 516;
+            elements.fullscreenCanvas.height = 288;
+            fullscreenCtx.clearRect(0, 0, 516, 288);
             fullscreenCtx.drawImage(elements.displayCanvas, 0, 0);
         }
     }
@@ -729,16 +805,21 @@ const app = {
     async init() {
         // 初期UI状態の設定
         elements.normalControls.classList.add('hidden');
+        
         // 各モジュールの初期化
         await cameraModule.startCamera();
+        websocketModule.init(); // WebSocket接続を初期化
         speechModule.init();
         fullscreenModule.setupEventListeners();
         uiModule.setupRecordingButtons();
         uiModule.setupStartButton();
+        
         // フレーム送信の定期実行
         setInterval(() => imageModule.sendFrame(), CONFIG.FRAME_RATE);
+        
         // タッチイベントの最適化
         this.optimizeTouchEvents();
+        
         console.log('🐠 魚認識アプリが初期化されました');
     },
 
@@ -746,8 +827,7 @@ const app = {
         document.addEventListener('touchstart', function(){}, {passive: true});
         document.addEventListener('touchmove', function(){}, {passive: true});
     }
-};
-// アプリケーション起動
+};// アプリケーション起動
 app.init();
   </script>
 </body>
