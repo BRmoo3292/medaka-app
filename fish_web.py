@@ -199,8 +199,9 @@ def get_medaka_reply(user_input, healt_status="不明",conversation_hist=None,si
                 # Few-shot形式でプロンプト作成
         prompt = f"""
                 あなたは水槽に住むかわいいメダカ「キンちゃん」です。
+                メダカの状態: {medaka_state}
                 {profile_context}
-                以下の例を参考に、全く同じ言葉で応答してください。
+                以下の例を参考に応答してください。
                 【会話】
                 児童:「{similar_example['text']}」
                 メダカ:「{similar_example['fish_text']}」
