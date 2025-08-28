@@ -467,6 +467,45 @@ const websocketModule = {
 };
 // 画像処理・送信機能
 const imageModule = {
+    // デバイス情報を取得
+    getDeviceInfo() {
+        const isPhone = window.innerWidth <= 768;
+        const pixelRatio = window.devicePixelRatio || 1;
+        return { isPhone, pixelRatio };
+    },
+
+    // 適切なキャンバスサイズを計算
+    calculateCanvasSize() {
+        const { isPhone, pixelRatio } = this.getDeviceInfo();
+        const videoWidth = elements.video.videoWidth;
+        const videoHeight = elements.video.videoHeight;
+        
+        if (!videoWidth || !videoHeight) {
+            return { width: 516, height: 288 }; // フォールバック
+        }
+        
+        // アスペクト比を維持
+        const aspectRatio = videoWidth / videoHeight;
+        
+        let targetWidth, targetHeight;
+        
+        if (isPhone) {
+            // スマホの場合：画面幅に合わせる
+            const maxWidth = Math.min(window.innerWidth * 0.9, 400);
+            targetWidth = maxWidth;
+            targetHeight = maxWidth / aspectRatio;
+        } else {
+            // PC/タブレットの場合：固定サイズ
+            targetWidth = 516;
+            targetHeight = 288;
+        }
+        
+        return {
+            width: Math.round(targetWidth),
+            height: Math.round(targetHeight)
+        };
+    },
+
     async sendFrame() {
         if (appState.isSending || !elements.video.videoWidth || !elements.video.videoHeight) return;
         
@@ -502,12 +541,23 @@ const imageModule = {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
-        // HTTPフォールバック用は固定サイズ
-        canvas.width = 516;
-        canvas.height = 288;
-        ctx.drawImage(elements.video, 0, 0, 516, 288);
+        // デバイスに適したサイズを計算
+        const { width, height } = this.calculateCanvasSize();
+        canvas.width = width;
+        canvas.height = height;
         
-        return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', CONFIG.IMAGE_QUALITY));
+        // 高品質な描画設定
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        
+        // ビデオをキャンバスに描画（アスペクト比維持）
+        ctx.drawImage(elements.video, 0, 0, width, height);
+        
+        // スマホの場合は圧縮率を調整
+        const { isPhone } = this.getDeviceInfo();
+        const quality = isPhone ? 0.8 : CONFIG.IMAGE_QUALITY;
+        
+        return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
     },
 
     async sendToServer(blob) {
@@ -545,20 +595,89 @@ const imageModule = {
     },
 
     updateCanvases(resultImg) {
-        // HTTPフォールバック時は固定サイズで表示
-        elements.displayCanvas.width = 516;
-        elements.displayCanvas.height = 288;
-        displayCtx.drawImage(resultImg, 0, 0, 516, 288);
+        // デバイスに適したサイズで表示
+        const { width, height } = this.calculateCanvasSize();
+        
+        // 表示キャンバスのサイズを設定
+        elements.displayCanvas.width = width;
+        elements.displayCanvas.height = height;
+        
+        // CSS サイズも明示的に設定（スマホ対応）
+        elements.displayCanvas.style.width = `${width}px`;
+        elements.displayCanvas.style.height = `${height}px`;
+        elements.displayCanvas.style.maxWidth = '100%';
+        elements.displayCanvas.style.height = 'auto';
+        
+        // 高品質な描画設定
+        displayCtx.imageSmoothingEnabled = true;
+        displayCtx.imageSmoothingQuality = 'high';
+        
+        // 画像を描画
+        displayCtx.drawImage(resultImg, 0, 0, width, height);
         
         // フルスクリーン表示中なら同期
         if (appState.isFullscreen) {
-            elements.fullscreenCanvas.width = 516;
-            elements.fullscreenCanvas.height = 288;
-            fullscreenCtx.clearRect(0, 0, 516, 288);
-            fullscreenCtx.drawImage(elements.displayCanvas, 0, 0);
+            this.updateFullscreenCanvas();
+        }
+    },
+
+    updateFullscreenCanvas() {
+        if (!appState.isFullscreen || !elements.displayCanvas) return;
+        
+        // フルスクリーン時は画面全体に合わせる
+        const screenWidth = window.innerWidth;
+        const screenHeight = window.innerHeight;
+        
+        elements.fullscreenCanvas.width = screenWidth;
+        elements.fullscreenCanvas.height = screenHeight;
+        elements.fullscreenCanvas.style.width = `${screenWidth}px`;
+        elements.fullscreenCanvas.style.height = `${screenHeight}px`;
+        
+        // 高品質な描画設定
+        fullscreenCtx.imageSmoothingEnabled = true;
+        fullscreenCtx.imageSmoothingQuality = 'high';
+        
+        // アスペクト比を維持してセンタリング
+        const canvasAspectRatio = elements.displayCanvas.width / elements.displayCanvas.height;
+        const screenAspectRatio = screenWidth / screenHeight;
+        
+        let drawWidth, drawHeight, drawX, drawY;
+        
+        if (canvasAspectRatio > screenAspectRatio) {
+            // キャンバスが横長：幅を画面に合わせる
+            drawWidth = screenWidth;
+            drawHeight = screenWidth / canvasAspectRatio;
+            drawX = 0;
+            drawY = (screenHeight - drawHeight) / 2;
+        } else {
+            // キャンバスが縦長：高さを画面に合わせる
+            drawWidth = screenHeight * canvasAspectRatio;
+            drawHeight = screenHeight;
+            drawX = (screenWidth - drawWidth) / 2;
+            drawY = 0;
+        }
+        
+        fullscreenCtx.clearRect(0, 0, screenWidth, screenHeight);
+        fullscreenCtx.drawImage(elements.displayCanvas, drawX, drawY, drawWidth, drawHeight);
+    },
+
+    // ウィンドウサイズ変更時の対応
+    handleResize() {
+        if (appState.currentImageData) {
+            this.updateCanvases(appState.currentImageData);
         }
     }
 };
+window.addEventListener('resize', () => {
+    imageModule.handleResize();
+});
+
+// オリエンテーション変更時の処理（モバイル対応）
+window.addEventListener('orientationchange', () => {
+    setTimeout(() => {
+        imageModule.handleResize();
+    }, 500); // オリエンテーション変更後に少し待つ
+});
 // 音声認識機能
 const speechModule = {
     recognition: null,
