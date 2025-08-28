@@ -604,6 +604,7 @@ const speechModule = {
                 }
             }, 3000);
         };
+
         this.recognition.onend = () => {
             appState.isRecording = false;
             this.updateRecordingUI(false);
@@ -660,10 +661,14 @@ const speechModule = {
                     // 2回目の会話フロー - 直接録音開始
                     console.log("[録音] 2回目フロー - 直接録音開始");
                     this.startDirectRecording();
-                } else {
-                    // 1回目の会話フロー - メダカから話しかけてから録音
-                    console.log("[録音] 1回目フロー - メダカから話しかけ");
+                } else if (sessionData.proactive_enabled) {
+                    // 1回目の会話フロー - プロアクティブ機能が有効な場合のみメダカから話しかけ
+                    console.log("[録音] 1回目フロー - メダカから話しかけ（プロアクティブ有効）");
                     await this.startWithMedakaGreeting();
+                } else {
+                    // プロアクティブ機能が無効 - 直接録音開始
+                    console.log("[録音] 1回目フロー - 直接録音開始（プロアクティブ無効）");
+                    this.startDirectRecording();
                 }
             } catch (error) {
                 console.error("セッション状態確認エラー:", error);
@@ -675,9 +680,25 @@ const speechModule = {
 
     // 直接録音を開始
     startDirectRecording() {
-        appState.isRecording = true;
-        this.recognition.start();
-        this.updateRecordingUI(true);
+        if (!appState.isRecording && appState.shouldRestart) {
+            try {
+                appState.isRecording = true;
+                this.recognition.start();
+                this.updateRecordingUI(true);
+            } catch (error) {
+                console.error("録音開始エラー:", error);
+                appState.isRecording = false;
+                this.updateRecordingUI(false);
+                elements.statusDiv.textContent = "🐟 メダカにお話ししてね！";
+                
+                // エラーの場合も再試行
+                setTimeout(() => {
+                    if (appState.shouldRestart && !appState.isRecording) {
+                        this.startDirectRecording();
+                    }
+                }, 3000);
+            }
+        }
     },
 
     // メダカの挨拶から始める録音
@@ -778,7 +799,7 @@ const fullscreenModule = {
 // UI制御機能
 const uiModule = {
     setupRecordingButtons() {
-        // 録音開始ボタン
+        // 録音開始ボタン - 修正版
         [elements.normalRecordBtn, elements.recordBtn].forEach(btn => {
             btn.addEventListener('click', () => speechModule.startRecording());
         });
@@ -787,6 +808,7 @@ const uiModule = {
             btn.addEventListener('click', () => speechModule.stopRecording());
         });
     },
+    
     setupStartButton() {
         elements.startButton.addEventListener("click", () => {
             elements.replyAudio.src = "";
@@ -799,8 +821,7 @@ const uiModule = {
             }, 500);
         });
     }
-};
-// アプリケーション初期化・メイン処理
+};// アプリケーション初期化・メイン処理
 const app = {
     async init() {
         // 初期UI状態の設定

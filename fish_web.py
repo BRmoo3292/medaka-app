@@ -612,11 +612,14 @@ async def check_session_status(request: Request):
     # アクティブセッションがあるかチェック
     has_active_session = profile_id in active_session
     
+    # 環境変数からプロアクティブモード設定を取得
+    medaka_proactive_enabled = os.getenv("MEDAKA_PROACTIVE_ENABLED", "true").lower() == "true"
+    
     return {
         "has_active_session": has_active_session,
-        "conversation_count": len(conversation_history.get(profile_id, []))
+        "conversation_count": len(conversation_history.get(profile_id, [])),
+        "proactive_enabled": medaka_proactive_enabled
     }
-
 # プロアクティブメッセージ生成エンドポイント
 @app.post("/get_proactive_message")
 async def get_proactive_message(request: Request):
@@ -663,6 +666,7 @@ async def get_proactive_message(request: Request):
             tts_path = tts_file.name
     
     return FileResponse(tts_path, media_type="audio/mpeg", filename="proactive_reply.mp3")
+
 
 #--------デバック用エンドポイント--------
 @app.get("/conversation_history")
