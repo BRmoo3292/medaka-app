@@ -466,7 +466,7 @@ const websocketModule = {
             if (appState.ws && appState.ws.readyState === WebSocket.OPEN) {
                 appState.ws.send(blob);
             }
-        }, 'image/jpeg', 1.0);
+        }, 'image/jpeg', 0.8);
 
         return true; // WebSocket送信成功
     }
@@ -509,38 +509,35 @@ const imageModule = {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
-        // ビデオの元解像度をそのまま使用（固定サイズなし）
+        // ビデオの元解像度をそのまま使用
         canvas.width = elements.video.videoWidth;
         canvas.height = elements.video.videoHeight;
         
-        // 高品質な描画設定
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        
-        // ビデオをキャンバスに描画（元解像度のまま）
+        // ビデオをキャンバスに描画
         ctx.drawImage(elements.video, 0, 0);
         
-        // 圧縮なし（品質1.0）
-        return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 1.0));
+        // 元のコードと同じ設定（品質0.8）
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+        return blob;
     },
 
-    async sendToServer(blob) {
-        // Blobの検証を追加
-        if (!blob || !(blob instanceof Blob)) {
-            throw new Error('有効なBlobが生成されませんでした');
-        }
-        
+async sendToServer(blob) {
         const formData = new FormData();
         formData.append('file', blob, 'capture.jpg');
         
-        const response = await fetch(`${CONFIG.SERVER_URL}/predict`, {
-            method: 'POST',
-            body: formData,
-        });
-        
-        if (!response.ok) throw new Error('サーバーエラー');
-        
-        return await response.blob();
+        try {
+            const response = await fetch(`${CONFIG.SERVER_URL}/predict`, {
+                method: 'POST',
+                body: formData,
+            });
+            
+            if (!response.ok) throw new Error('サーバーエラー');
+            
+            return await response.blob();
+        } catch (error) {
+            console.error('サーバー通信エラー:', error);
+            throw error;
+        }
     },
 
     async displayResult(resultBlob) {
