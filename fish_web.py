@@ -352,11 +352,14 @@ async def classify_child_response(
     
     return result, maintain_similarity, upgrade_similarity
 
-@app.post("/talk_with_fish_text")#メダカとの会話（テキストレスポンス版）
-async def talk_with_fish_text(request: Request):
+@app.post("/talk_with_fish_text_only")  # テキストのみを返すエンドポイント
+async def talk_with_fish_text_only(request: Request):
+    """メダカとの会話（テキストレスポンスのみ）"""
     start_total = time.time()
     data = await request.json()
     user_input = data.get("user_input", "")
+    session_id = data.get("session_id", "")  # 今回は使用しないが、互換性のため受け取る
+    
     if not user_input.strip():
         raise HTTPException(400, "user_input is required")
     
@@ -368,44 +371,47 @@ async def talk_with_fish_text(request: Request):
             raise HTTPException(404, "Profile not found")
         current_stage = profile["development_stage"]
     
-    #会話履歴の取得/初期化
+    # 会話履歴の取得/初期化
     if CURRENT_PROFILE_ID not in conversation_history:
         conversation_history[CURRENT_PROFILE_ID] = []
     current_history = conversation_history[CURRENT_PROFILE_ID]
+    
     session = active_session.get(CURRENT_PROFILE_ID)
-    assessment_result = None  
+    assessment_result = None
     similar_example = None
 
-    assessment_result = None  # 初期化
     if session is None:
-      # 1回目の会話：類似例を検索
+        # 1回目の会話：類似例を検索
         print("[会話フロー] 1回目の会話 - 類似例を検索")
         similar_example = await find_similar_conversation(user_input, current_stage)
         reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
+        
         # 類似例を保存（次回の判定用）
         if (similar_example and 
             'child_reply_1_embedding' in similar_example and 
             similar_example['distance'] < 0.5):
             session = ConversationSession(
-                    profile_id = CURRENT_PROFILE_ID,
-                    first_input = user_input,
-                    medaka_response = reply_text,
-                    similar_example = similar_example,
-                    current_stage = current_stage
+                profile_id=CURRENT_PROFILE_ID,
+                first_input=user_input,
+                medaka_response=reply_text,
+                similar_example=similar_example,
+                current_stage=current_stage
             )
             active_session[CURRENT_PROFILE_ID] = session
             print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
         else:
-            print(f"[セッション] 類似度が低い（{similar_example['distance'] if similar_example else 'N/A'}）- 通常の会話として処理")
+            print(f"[セッション] 類似度が低い - 通常の会話として処理")
     else:
-        #2回目の会話の場合、発達段階判定を実行
+        # 2回目の会話の場合、発達段階判定を実行
         print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
-        #児童の応答分類（openai_clientを削除）
+        
+        # 児童の応答分類
         assessment = await classify_child_response(
             user_input,
-            session.similar_example
-            # openai_clientを削除 - 関数定義から削除されているため
+            session.similar_example,
+            openai_client,
         )
+        
         assessment_result = {
             'result': assessment[0],
             'maintain_score': round(float(assessment[1]), 3),
@@ -413,6 +419,7 @@ async def talk_with_fish_text(request: Request):
             'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),
             'assessed_at': datetime.now().isoformat(),
         }
+        
         reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
         session_id = session.complete_session(user_input, assessment)
         del active_session[CURRENT_PROFILE_ID]  # セッション完了後は削除
@@ -420,15 +427,16 @@ async def talk_with_fish_text(request: Request):
 
     # 会話履歴に追加
     conversation_entry = {
-            "child": user_input,
-            "medaka": reply_text,
-            "timestamp": datetime.now().isoformat(),
-            "similar_example_used": similar_example['text'] if similar_example else None,
-            "similarity_score": similar_example['distance'] if similar_example else None,
-            "has_assessment": assessment_result is not None,
-            "assessment_result": assessment_result,
-            "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
+        "child": user_input,
+        "medaka": reply_text,
+        "timestamp": datetime.now().isoformat(),
+        "similar_example_used": similar_example['text'] if similar_example else None,
+        "similarity_score": similar_example['distance'] if similar_example else None,
+        "has_assessment": assessment_result is not None,
+        "assessment_result": assessment_result,
+        "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
     }
+    
     conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
     if len(conversation_history[CURRENT_PROFILE_ID]) > 20:
         conversation_history[CURRENT_PROFILE_ID] = conversation_history[CURRENT_PROFILE_ID][-20:]
@@ -438,15 +446,13 @@ async def talk_with_fish_text(request: Request):
     end_total = time.time()
     print(f"[総処理時間] {end_total - start_total:.2f}秒")
     
-    # ★ テキストレスポンスを返す（音声合成なし）
-    return JSONResponse(content={
+    # JSONレスポンスを返す
+    return {
         "reply": reply_text,
-        "medaka_state": latest_health,
-        "has_assessment": assessment_result is not None,
         "assessment_result": assessment_result,
-        "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed",
+        "session_status": "started" if CURRENT_PROFILE_ID in active_session else "completed",
         "processing_time": round(end_total - start_total, 2)
-    })
+    }
 
 @app.post("/predict")
 async def predict(file: UploadFile):
