@@ -215,7 +215,7 @@ def get_medaka_reply(user_input, healt_status="不明",conversation_hist=None,si
                 # 類似例がない場合の基本プロンプト
                 prompt = f"""
         あなたは水槽に住むかわいいメダカ「キンちゃん」です。
-        {profile_context}{history_context}
+        {profile_context}
         児童:「{user_input}」
 
         30文字以内で、優しく小学生らしい口調で答えてください。
