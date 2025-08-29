@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, HTTPException,Request,Body
-from fastapi.responses import StreamingResponse,JSONResponse,FileResponse
+from fastapi.responses import StreamingResponse,FileResponse
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
@@ -352,14 +352,13 @@ async def classify_child_response(
     
     return result, maintain_similarity, upgrade_similarity
 
-@app.post("/talk_with_fish_text")#メダカとの会話（テキストレスポンス版）
+@app.post("/talk_with_fish_text")#メダカとの会話
 async def talk_with_fish_text(request: Request):
     start_total = time.time()
     data = await request.json()
     user_input = data.get("user_input", "")
     if not user_input.strip():
         raise HTTPException(400, "user_input is required")
-    
     # 1) プロファイルからステージ取得
     with pg_conn.cursor() as cur:
         cur.execute("SELECT * FROM profiles WHERE id = %s;", (CURRENT_PROFILE_ID,))
@@ -367,7 +366,6 @@ async def talk_with_fish_text(request: Request):
         if not profile:
             raise HTTPException(404, "Profile not found")
         current_stage = profile["development_stage"]
-    
     #会話履歴の取得/初期化
     if CURRENT_PROFILE_ID not in conversation_history:
         conversation_history[CURRENT_PROFILE_ID] = []
@@ -396,57 +394,75 @@ async def talk_with_fish_text(request: Request):
             active_session[CURRENT_PROFILE_ID] = session
             print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
         else:
-            print(f"[セッション] 類似度が低い（{similar_example['distance'] if similar_example else 'N/A'}）- 通常の会話として処理")
+            print(f"[セッション] 類似度が低い（{similar_example['distance']:.4f} >= 0.5）- 通常の会話として処理")
     else:
         #2回目の会話の場合、発達段階判定を実行
         print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
-        #児童の応答分類（openai_clientを削除）
+        #児童の応答分類
         assessment = await classify_child_response(
             user_input,
-            session.similar_example
-            # openai_clientを削除 - 関数定義から削除されているため
+            session.similar_example,
+            openai_client,
         )
         assessment_result = {
             'result': assessment[0],
-            'maintain_score': round(float(assessment[1]), 3),
-            'upgrade_score': round(float(assessment[2]), 3),
-            'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),
-            'assessed_at': datetime.now().isoformat(),
+            'maintain_score': round(float(assessment[1]), 3),      # 小数第二位まで
+            'upgrade_score': round(float(assessment[2]), 3),       # 小数第二位まで
+            'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),  # 小数第二位まで
+            'assessed_at': datetime.now(),
         }
         reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
         session_id = session.complete_session(user_input, assessment)
         del active_session[CURRENT_PROFILE_ID]  # セッション完了後は削除
         print(f"[セッション] 判定完了 - セッションID: {session_id}")
 
-    # 会話履歴に追加
+        # 会話履歴に追加
     conversation_entry = {
             "child": user_input,
             "medaka": reply_text,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(),
             "similar_example_used": similar_example['text'] if similar_example else None,
             "similarity_score": similar_example['distance'] if similar_example else None,
             "has_assessment": assessment_result is not None,
             "assessment_result": assessment_result,
             "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
+
     }
     conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
     if len(conversation_history[CURRENT_PROFILE_ID]) > 20:
         conversation_history[CURRENT_PROFILE_ID] = conversation_history[CURRENT_PROFILE_ID][-20:]
 
     print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
+    t2 = time.time()
     
+    async with openai_client.audio.speech.with_streaming_response.create(
+        model="gpt-4o-mini-tts",  # OpenAIの利用可能なTTSモデル
+        voice="coral",
+        instructions="""
+        Voice Affect:のんびりしていて、かわいらしい無邪気さ  
+        Tone:ほんわか、少しおっとり、親しみやすい  
+        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+        Pronunciation:語尾はやわらかく、やや伸ばし気味に（例：「ねぇ〜」「だよぉ〜」）  
+        Pauses:語尾や会話の区切りで軽く間をとる  
+        Dialect:標準語だが、子どもっぽいやさしい言い回し  
+        Delivery:おっとりしていて、聞いていてほっとするような声  
+        Phrasing:たまにちょっとズレた発言も混ぜる。例：「お空って、水のうえにあるの？」
+        """,
+        speed=1.0,
+        input=reply_text,
+        response_format="mp3",
+    ) as response:
+        t3 = time.time()    
+        #ストリーミング再生
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
+            async for chunk in response.iter_bytes():
+                tts_file.write(chunk)
+            tts_path = tts_file.name
     end_total = time.time()
+    print(f"[TTS生成] {t3 - t2:.2f}秒")
     print(f"[総処理時間] {end_total - start_total:.2f}秒")
-    
-    # ★ テキストレスポンスを返す（音声合成なし）
-    return JSONResponse(content={
-        "reply": reply_text,
-        "medaka_state": latest_health,
-        "has_assessment": assessment_result is not None,
-        "assessment_result": assessment_result,
-        "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed",
-        "processing_time": round(end_total - start_total, 2)
-    })
+    return FileResponse(tts_path, media_type="audio/mpeg", filename="reply.mp3")
+
 
 @app.post("/predict")
 async def predict(file: UploadFile):
@@ -627,13 +643,30 @@ async def get_proactive_message(request: Request):
     # プロアクティブメッセージを生成
     message = get_proactive_medaka_message(conversation_count, profile)
     
-    # ★ テキストレスポンスを返す（音声合成なし）
-    return JSONResponse(content={
-        "message": message,
-        "conversation_count": conversation_count,
-        "profile_name": profile.get('name', 'Unknown'),
-        "development_stage": profile.get('development_stage', '不明')
-    })
+    # TTS生成
+    async with openai_client.audio.speech.with_streaming_response.create(
+        model="gpt-4o-mini-tts",
+        voice="coral",
+        instructions="""
+        Voice Affect:のんびりしていて、かわいらしい無邪気さ  
+        Tone:ほんわか、少しおっとり、親しみやすい  
+        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+        Pronunciation:語尾はやわらかく、やや伸ばし気味に（例：「ねぇ〜」「だよぉ〜」）  
+        Pauses:語尾や会話の区切りで軽く間をとる  
+        Dialect:標準語だが、子どもっぽいやさしい言い回し  
+        Delivery:おっとりしていて、聞いていてほっとするような声  
+        Phrasing:たまにちょっとズレた発言も混ぜる。例：「お空って、水のうえにあるの？」
+        """,
+        speed=1.0,
+        input=message,
+        response_format="mp3",
+    ) as response:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
+            async for chunk in response.iter_bytes():
+                tts_file.write(chunk)
+            tts_path = tts_file.name
+    
+    return FileResponse(tts_path, media_type="audio/mpeg", filename="proactive_reply.mp3")
 
 
 #--------デバック用エンドポイント--------
