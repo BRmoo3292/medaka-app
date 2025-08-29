@@ -404,6 +404,7 @@ async def talk_with_fish_text(request: Request):
         assessment = await classify_child_response(
             user_input,
             session.similar_example,
+            openai_client  # この引数を追加してください
         )
         assessment_result = {
             'result': assessment[0],
