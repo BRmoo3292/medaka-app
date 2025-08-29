@@ -400,11 +400,11 @@ async def talk_with_fish_text(request: Request):
     else:
         #2回目の会話の場合、発達段階判定を実行
         print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
-        #児童の応答分類
+        #児童の応答分類（openai_clientを削除）
         assessment = await classify_child_response(
             user_input,
-            session.similar_example,
-            openai_client  # この引数を追加してください
+            session.similar_example
+            # openai_clientを削除 - 関数定義から削除されているため
         )
         assessment_result = {
             'result': assessment[0],
@@ -447,7 +447,6 @@ async def talk_with_fish_text(request: Request):
         "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed",
         "processing_time": round(end_total - start_total, 2)
     })
-
 
 @app.post("/predict")
 async def predict(file: UploadFile):
