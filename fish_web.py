@@ -384,12 +384,11 @@ async def talk_with_fish_text_only(request: Request):
         # 1回目の会話：類似例を検索
         print("[会話フロー] 1回目の会話 - 類似例を検索")
         similar_example = await find_similar_conversation(user_input, current_stage)
-        reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
-        
         # 類似例を保存（次回の判定用）
         if (similar_example and 
             'child_reply_1_embedding' in similar_example and 
             similar_example['distance'] < 0.5):
+            reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
             session = ConversationSession(
                 profile_id=CURRENT_PROFILE_ID,
                 first_input=user_input,
@@ -400,6 +399,7 @@ async def talk_with_fish_text_only(request: Request):
             active_session[CURRENT_PROFILE_ID] = session
             print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
         else:
+            reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
             print(f"[セッション] 類似度が低い - 通常の会話として処理")
     else:
         # 2回目の会話の場合、発達段階判定を実行
