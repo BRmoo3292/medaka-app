@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, HTTPException,Request,Body
-from fastapi.responses import StreamingResponse,FileResponse,JSONResponse
+from fastapi.responses import StreamingResponse,JSONResponse,FileResponse
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
@@ -627,30 +627,13 @@ async def get_proactive_message(request: Request):
     # プロアクティブメッセージを生成
     message = get_proactive_medaka_message(conversation_count, profile)
     
-    # TTS生成
-    async with openai_client.audio.speech.with_streaming_response.create(
-        model="gpt-4o-mini-tts",
-        voice="coral",
-        instructions="""
-        Voice Affect:のんびりしていて、かわいらしい無邪気さ  
-        Tone:ほんわか、少しおっとり、親しみやすい  
-        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
-        Pronunciation:語尾はやわらかく、やや伸ばし気味に（例：「ねぇ〜」「だよぉ〜」）  
-        Pauses:語尾や会話の区切りで軽く間をとる  
-        Dialect:標準語だが、子どもっぽいやさしい言い回し  
-        Delivery:おっとりしていて、聞いていてほっとするような声  
-        Phrasing:たまにちょっとズレた発言も混ぜる。例：「お空って、水のうえにあるの？」
-        """,
-        speed=1.0,
-        input=message,
-        response_format="mp3",
-    ) as response:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
-            async for chunk in response.iter_bytes():
-                tts_file.write(chunk)
-            tts_path = tts_file.name
-    
-    return FileResponse(tts_path, media_type="audio/mpeg", filename="proactive_reply.mp3")
+    # ★ テキストレスポンスを返す（音声合成なし）
+    return JSONResponse(content={
+        "message": message,
+        "conversation_count": conversation_count,
+        "profile_name": profile.get('name', 'Unknown'),
+        "development_stage": profile.get('development_stage', '不明')
+    })
 
 
 #--------デバック用エンドポイント--------
