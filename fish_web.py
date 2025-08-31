@@ -47,7 +47,7 @@ speed_history = defaultdict(lambda: deque(maxlen=75))
 fps = 15
 latest_health = "Normal"
 track_history = defaultdict(lambda: (0, 0))  
-CURRENT_PROFILE_ID = 2  #プロファイルID
+CURRENT_PROFILE_ID = 1  #プロファイルID
 last_similar_example = defaultdict(lambda: None)  # 2回目の会話待ちの情報を保持
 
 # Session Pooler対応のデータベース接続関数
