@@ -495,7 +495,6 @@ const imageModule = {
             appState.isSending = false; // エラー時は解放
         }
     },
-
     async sendFrameHTTP() {
         const processedBlob = await this.captureAndProcessVideo();
         const resultBlob = await this.sendToServer(processedBlob);

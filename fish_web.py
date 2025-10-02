@@ -178,8 +178,8 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             await websocket.close()
         except:
-            pass
-#ベクトル検索の関数
+            pass#ベクトル検索の関数
+
 async def find_similar_conversation(user_input: str,development_stage: str):
         # ユーザー入力をベクトル化
          print(f"[ベクトル化] ユーザー入力: {user_input}")
