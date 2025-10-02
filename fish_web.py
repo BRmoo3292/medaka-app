@@ -1,5 +1,4 @@
-from fastapi import FastAPI, UploadFile, HTTPException,Request,Body,WebSocket, WebSocketDisconnect
-from starlette.websockets import WebSocketState
+from fastapi import FastAPI, UploadFile, HTTPException,Request,Body
 from fastapi.responses import StreamingResponse,FileResponse
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,6 +36,9 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 INFERENCE_SERVER_URL = os.getenv("INFERENCE_SERVER_URL")
 model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
+print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
+print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
+print(f"[起動時] Gemini API: {'設定済み' if GEMINI_API_KEY else '未設定'}")
 
 # グローバル変数
 active_session ={}  # セッション管理用
@@ -137,49 +139,9 @@ except Exception as e:
     print(f"❌ DB接続エラー: {e}")
     exit(1)
 
-# WebSocket接続管理
-active_connections = []
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    print(f"[WebSocket] 新規接続")
-    
-    try:
-        while True:
-            # バイナリデータ（画像）を受信
-            image_data = await websocket.receive_bytes()
-            
-            # 推論サーバーに送信（非同期処理）
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                files = {"file": ("frame.jpg", io.BytesIO(image_data), "image/jpeg")}
-                
-                try:
-                    response = await client.post(
-                        f"{INFERENCE_SERVER_URL}/predict", 
-                        files=files
-                    )
-                    
-                    if response.status_code == 200:
-                        # 結果を即座に送り返す
-                        await websocket.send_bytes(response.content)
-                    else:
-                        print(f"[WebSocket] 推論エラー: {response.status_code}")
-                        
-                except httpx.TimeoutException:
-                    print(f"[WebSocket] タイムアウト")
-                except Exception as e:
-                    print(f"[WebSocket] 推論エラー: {e}")
-            
-    except WebSocketDisconnect:
-        print(f"[WebSocket] 切断")
-    except Exception as e:
-        print(f"[WebSocket] エラー: {e}")
-        try:
-            await websocket.close()
-        except:
-            pass#ベクトル検索の関数
 
+#ベクトル検索の関数
 async def find_similar_conversation(user_input: str,development_stage: str):
         # ユーザー入力をベクトル化
          print(f"[ベクトル化] ユーザー入力: {user_input}")
@@ -237,6 +199,7 @@ def get_medaka_reply(user_input, healt_status="不明",conversation_hist=None,si
                 # Few-shot形式でプロンプト作成
         prompt = f"""
                 あなたは水槽に住むかわいいメダカ「キンちゃん」です。
+                メダカの状態: {medaka_state}
                 {profile_context}
                 以下の例を参考に、全く同じ言葉で応答してください。
                 【会話】
@@ -250,23 +213,15 @@ def get_medaka_reply(user_input, healt_status="不明",conversation_hist=None,si
 
     else:
                 # 類似例がない場合の基本プロンプト
-              prompt = f"""
+                prompt = f"""
         あなたは水槽に住むかわいいメダカ「キンちゃん」です。
-        以下の応答戦略を参考にして
-        ・子どもの単語を「短文」に直して返す（モデリングする）。
-         例：「おさかな」→「そうだね、“おさかながいるね” って言えるよ」
-        ・Yes/No 質問は避け、必ず「2択」や「どっち？」で答えを引き出す。
-         - 例：「赤い？青い？」、「大きい？小さい？」
-        ・子どもの単語に追加の言葉をつけて誘導する。
-        - 例：「きれい」→「そうだね、“きれいな魚” だね。何色がきれい？」
-        ・オウム返しが出たら、それを「気持ち」や「評価」の質問に変換する。
-        - 例：子「おさかな」→「そうだね。おさかな“好き？”」
-        少しでも単語＋αが言えたら大きく褒める。
-        {profile_context}
-        30文字以内で、優しく小学生らしい口調で答えてください。
+        {profile_context}{history_context}
         児童:「{user_input}」
-        キンちゃん:
-        """
+
+        30文字以内で、優しく小学生らしい口調で答えてください。
+        メダカの状態: {medaka_state}
+
+        キンちゃん:"""
 
     print(f"[応答生成] プロンプト作成完了",prompt)
     generation_config = genai.types.GenerationConfig(

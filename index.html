@@ -34,47 +34,32 @@
       text-shadow: 0 2px 4px rgba(0,0,0,0.3);
     }
     
-    .video-section {
+    .display-section {
       width: 100%;
       max-width: 400px;
       margin-bottom: 10px;
     }
     
-    #video {
+    .view-container {
+      position: relative;
+      width: 100%;
+    }
+    
+    #video, #displayCanvas {
       width: 100%;
       height: auto;
       border-radius: 12px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    }
-    
-    .canvas-container {
-      position: relative;
-      width: 100%;
-      max-width: 400px;
-      margin: 10px 0;
+      background: rgba(0,0,0,0.5);
     }
     
     #displayCanvas {
-      width: 100%;
-      height: auto;
-      border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
       cursor: pointer;
       transition: transform 0.2s ease;
     }
     
     #displayCanvas:active {
       transform: scale(0.98);
-    }
-    
-    .canvas-overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      pointer-events: none;
-      border-radius: 12px;
     }
     
     .fullscreen-button {
@@ -98,7 +83,31 @@
       transform: scale(1.05);
     }
     
-    /* フルスクリーン時のスタイル */
+    .switch-button {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      border: none;
+      border-radius: 20px;
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      z-index: 10;
+      backdrop-filter: blur(10px);
+      transition: all 0.2s ease;
+    }
+    
+    .switch-button:hover {
+      background: rgba(0,0,0,0.9);
+      transform: scale(1.05);
+    }
+    
+    .switch-button:active {
+      transform: scale(0.95);
+    }
+    
     .fullscreen-container {
       position: fixed;
       top: 0;
@@ -250,7 +259,6 @@
       display: none !important;
     }
     
-    /* スマートフォン向けの調整 */
     @media (max-width: 768px) {
       .container {
         padding: 5px;
@@ -261,8 +269,7 @@
         margin: 5px 0;
       }
       
-      .video-section,
-      .canvas-container,
+      .display-section,
       .status-section {
         max-width: 95vw;
       }
@@ -283,14 +290,13 @@
   <div class="container">
     <h1>メダカにお話ししてね！</h1>
     
-    <div class="video-section">
-      <video id="video" autoplay playsinline muted></video>
-    </div>
-    
-    <div class="canvas-container" id="canvasContainer">
-      <canvas id="displayCanvas"></canvas>
-      <div class="canvas-overlay"></div>
-      <button class="fullscreen-button" id="canvasFullscreenBtn">🔍 拡大</button>
+    <div class="display-section">
+      <div class="view-container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="displayCanvas" class="hidden"></canvas>
+        <button class="fullscreen-button" id="canvasFullscreenBtn">🔍 拡大</button>
+        <button class="switch-button" id="switchViewBtn">📊 解析結果</button>
+      </div>
     </div>
     
     <div class="status-section">
@@ -305,7 +311,6 @@
     </div>
   </div>
   
-  <!-- フルスクリーン用のコンテナ -->
   <div class="fullscreen-container hidden" id="fullscreenContainer">
     <canvas id="fullscreenCanvas"></canvas>
     <div class="fullscreen-controls">
@@ -385,6 +390,7 @@ const cameraModule = {
     }
 };
 
+// WebSocket接続機能
 const websocketModule = {
     init() {
         this.connect();
@@ -396,7 +402,7 @@ const websocketModule = {
         
         appState.ws.onopen = () => {
             appState.wsConnected = true;
-            console.log('✅ WebSocket接続完了');
+            console.log('WebSocket接続完了');
         };
         
         appState.ws.onmessage = (event) => {
@@ -405,12 +411,12 @@ const websocketModule = {
         
         appState.ws.onclose = () => {
             appState.wsConnected = false;
-            console.log('⚠️ WebSocket切断 - 再接続中...');
-            setTimeout(() => this.connect(), 2000);
+            console.log('WebSocket接続が切断されました。再接続を試行します...');
+            setTimeout(() => this.connect(), 1000);
         };
 
         appState.ws.onerror = (error) => {
-            console.error('❌ WebSocket エラー:', error);
+            console.error('WebSocket エラー:', error);
         };
     },
 
@@ -421,80 +427,83 @@ const websocketModule = {
         resultImg.onload = () => {
             appState.currentImageData = resultImg;
             
-            // 通常キャンバスに描画
+            // 元の画像サイズで表示（圧縮・固定サイズなし）
             elements.displayCanvas.width = resultImg.naturalWidth;
             elements.displayCanvas.height = resultImg.naturalHeight;
             displayCtx.drawImage(resultImg, 0, 0);
             
             // フルスクリーン表示中なら同期
             if (appState.isFullscreen) {
-                imageModule.updateFullscreenCanvas(resultImg);
+                this.updateFullscreenCanvas(resultImg);
             }
             
             URL.revokeObjectURL(imageUrl);
-            
-            // ★重要: 次のフレーム送信を許可
             appState.isSending = false;
         };
         
         resultImg.src = imageUrl;
     },
 
-    // ★修正: Promiseで確実にBlobを送信
-    async sendFrame() {
+    updateFullscreenCanvas(resultImg) {
+        if (!appState.isFullscreen) return;
+        
+        elements.fullscreenCanvas.width = resultImg.naturalWidth;
+        elements.fullscreenCanvas.height = resultImg.naturalHeight;
+        fullscreenCtx.clearRect(0, 0, resultImg.naturalWidth, resultImg.naturalHeight);
+        fullscreenCtx.drawImage(resultImg, 0, 0);
+    },
+
+    sendFrame() {
         if (!appState.ws || appState.ws.readyState !== WebSocket.OPEN) {
-            return false;
+            return false; // WebSocket使用不可
         }
 
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
-        canvas.width = 640;
-        canvas.height = 480;
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(elements.video, 0, 0, 640, 480);
+        // ビデオの元解像度をそのまま使用
+        canvas.width = elements.video.videoWidth;
+        canvas.height = elements.video.videoHeight;
+        ctx.drawImage(elements.video, 0, 0);
         
-        // Promiseでblob生成を待つ
-        const blob = await new Promise(resolve => {
-            canvas.toBlob(resolve, 'image/jpeg', 0.6);
-        });
-        
-        if (appState.ws && appState.ws.readyState === WebSocket.OPEN && blob) {
-            appState.ws.send(blob);
-            return true;
-        }
-        
-        return false;
+        // 圧縮なし（品質1.0）
+        canvas.toBlob(blob => {
+            if (appState.ws && appState.ws.readyState === WebSocket.OPEN) {
+                appState.ws.send(blob);
+            }
+        }, 'image/jpeg', 0.8);
+
+        return true; // WebSocket送信成功
     }
 };
 
 // 画像処理・送信機能
 const imageModule = {
     async sendFrame() {
-        if (appState.isSending || !elements.video.videoWidth || !elements.video.videoHeight) {
-            return; // 送信中または動画未準備
-        }
+        if (appState.isSending || !elements.video.videoWidth || !elements.video.videoHeight) return;
         
         appState.isSending = true;
         
         try {
-            // WebSocket優先
+            // WebSocket優先、失敗時はHTTPにフォールバック
             if (appState.wsConnected) {
-                const success = await websocketModule.sendFrame();
-                if (success) {
-                    // handleMessageでisSendingをfalseにする
-                    return;
-                }
+                const success = websocketModule.sendFrame();
+                if (success) return; // WebSocket送信成功
             }
             
             // HTTPフォールバック
             await this.sendFrameHTTP();
         } catch (error) {
             console.error("画像送信エラー:", error);
-            appState.isSending = false; // エラー時は解放
+            elements.statusDiv.textContent = '⚠️ 通信エラーが発生しました';
+        } finally {
+            // WebSocket使用時はhandleMessageでisSendingをfalseにする
+            if (!appState.wsConnected) {
+                appState.isSending = false;
+            }
         }
     },
+
     async sendFrameHTTP() {
         const processedBlob = await this.captureAndProcessVideo();
         const resultBlob = await this.sendToServer(processedBlob);
