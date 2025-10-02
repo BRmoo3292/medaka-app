@@ -1,6 +1,8 @@
-from fastapi import FastAPI, UploadFile, HTTPException,Request,Body
+from fastapi import FastAPI, UploadFile, HTTPException,Request,Body,WebSocket, WebSocketDisconnect
+from typing import Dict
 from fastapi.responses import StreamingResponse,FileResponse
 import uvicorn
+import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 import time
@@ -36,9 +38,6 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 INFERENCE_SERVER_URL = os.getenv("INFERENCE_SERVER_URL")
 model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
-print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
-print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
-print(f"[起動時] Gemini API: {'設定済み' if GEMINI_API_KEY else '未設定'}")
 
 # グローバル変数
 active_session ={}  # セッション管理用
@@ -199,7 +198,6 @@ def get_medaka_reply(user_input, healt_status="不明",conversation_hist=None,si
                 # Few-shot形式でプロンプト作成
         prompt = f"""
                 あなたは水槽に住むかわいいメダカ「キンちゃん」です。
-                メダカの状態: {medaka_state}
                 {profile_context}
                 以下の例を参考に、全く同じ言葉で応答してください。
                 【会話】
@@ -213,15 +211,23 @@ def get_medaka_reply(user_input, healt_status="不明",conversation_hist=None,si
 
     else:
                 # 類似例がない場合の基本プロンプト
-                prompt = f"""
+              prompt = f"""
         あなたは水槽に住むかわいいメダカ「キンちゃん」です。
-        {profile_context}{history_context}
-        児童:「{user_input}」
-
+        以下の応答戦略を参考にして
+        ・子どもの単語を「短文」に直して返す（モデリングする）。
+         例：「おさかな」→「そうだね、“おさかながいるね” って言えるよ」
+        ・Yes/No 質問は避け、必ず「2択」や「どっち？」で答えを引き出す。
+         - 例：「赤い？青い？」、「大きい？小さい？」
+        ・子どもの単語に追加の言葉をつけて誘導する。
+        - 例：「きれい」→「そうだね、“きれいな魚” だね。何色がきれい？」
+        ・オウム返しが出たら、それを「気持ち」や「評価」の質問に変換する。
+        - 例：子「おさかな」→「そうだね。おさかな“好き？”」
+        少しでも単語＋αが言えたら大きく褒める。
+        {profile_context}
         30文字以内で、優しく小学生らしい口調で答えてください。
-        メダカの状態: {medaka_state}
-
-        キンちゃん:"""
+        児童:「{user_input}」
+        キンちゃん:
+        """
 
     print(f"[応答生成] プロンプト作成完了",prompt)
     generation_config = genai.types.GenerationConfig(
@@ -294,6 +300,82 @@ class ConversationSession:
         except Exception as e:
             print(f"[セッションDB] 保存エラー: {e}")
             return None
+# WebSocket接続管理
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+    
+    async def connect(self, websocket: WebSocket, client_id: str):
+        await websocket.accept()
+        self.active_connections[client_id] = websocket
+        print(f"[WebSocket] クライアント {client_id} が接続しました")
+    
+    def disconnect(self, client_id: str):
+        if client_id in self.active_connections:
+            del self.active_connections[client_id]
+            print(f"[WebSocket] クライアント {client_id} が切断しました")
+    
+    async def send_personal_message(self, message: bytes, client_id: str):
+        if client_id in self.active_connections:
+            websocket = self.active_connections[client_id]
+            await websocket.send_bytes(message)
+manager = ConnectionManager()
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    # クライアントIDを生成（実際の実装では、より適切な識別子を使用）
+    import uuid
+    client_id = str(uuid.uuid4())
+    
+    try:
+        await manager.connect(websocket, client_id)
+        
+        while True:
+            # クライアントから画像データを受信
+            data = await websocket.receive_bytes()
+            
+            # 画像処理
+            try:
+                # 受信した画像データをFormDataに変換
+                import io
+                from fastapi import UploadFile
+                
+                file = UploadFile(
+                    filename="capture.jpg",
+                    file=io.BytesIO(data)
+                )
+                
+                # 既存の/predictエンドポイントの処理を流用
+                # （実際には処理を共通化する関数を作成することを推奨）
+                
+                # 画像をinference serverに送信
+                files = {"file": ("capture.jpg", io.BytesIO(data), "image/jpeg")}
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        f"{INFERENCE_SERVER_URL}/predict",
+                        files=files
+                    )
+                
+                if response.status_code == 200:
+                    # 処理結果をクライアントに送信
+                    await manager.send_personal_message(
+                        response.content,
+                        client_id
+                    )
+                    
+                    # ヘルスステータスも更新
+                    global latest_health
+                    health_status = response.headers.get("X-Health-Status", "Unknown")
+                    latest_health = health_status
+                
+            except Exception as e:
+                print(f"[WebSocket] 画像処理エラー: {e}")
+                # エラーの場合は何もしない（接続は維持）
+                
+    except WebSocketDisconnect:
+        manager.disconnect(client_id)
+    except Exception as e:
+        print(f"[WebSocket] エラー: {e}")
+        manager.disconnect(client_id)
 
 #会話分類
 async def classify_child_response(
