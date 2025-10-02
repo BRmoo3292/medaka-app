@@ -321,42 +321,34 @@
   </div>
   
   <audio id="replyAudio" autoplay></audio>
+  
   <script>
-
 // 設定・定数
 const CONFIG = {
     SERVER_URL: window.location.origin,
-    FRAME_RATE: 33, // 15fps (1000ms / 30fps ≈ 33ms)
-    PROFILE_ID: 1 // デモ用
+    FRAME_RATE: 33,
+    PROFILE_ID: 1
 };
 
 // DOM要素の取得
 const elements = {
-    // 動画・キャンバス関連
     video: document.getElementById('video'),
     displayCanvas: document.getElementById('displayCanvas'),
     fullscreenCanvas: document.getElementById('fullscreenCanvas'),
-    
-    // オーディオ・ステータス
     replyAudio: document.getElementById("replyAudio"),
     statusDiv: document.getElementById("status"),
-    
-    // フルスクリーン関連
     canvasFullscreenBtn: document.getElementById("canvasFullscreenBtn"),
     fullscreenContainer: document.getElementById("fullscreenContainer"),
-    canvasContainer: document.getElementById("canvasContainer"),
-    
-    // ボタン類
     startButton: document.getElementById("startButton"),
     normalControls: document.getElementById("normalControls"),
     normalRecordBtn: document.getElementById("normalRecordBtn"),
     normalStopBtn: document.getElementById("normalStopBtn"),
     recordBtn: document.getElementById("recordBtn"),
     stopBtn: document.getElementById("stopBtn"),
-    exitBtn: document.getElementById("exitBtn")
+    exitBtn: document.getElementById("exitBtn"),
+    switchViewBtn: document.getElementById("switchViewBtn")
 };
 
-// キャンバスコンテキストの取得
 const displayCtx = elements.displayCanvas.getContext('2d');
 const fullscreenCtx = elements.fullscreenCanvas.getContext('2d');
 
@@ -368,7 +360,8 @@ const appState = {
     shouldRestart: true,
     isSending: false,
     ws: null,
-    wsConnected: false
+    wsConnected: false,
+    showingAnalysis: false
 };
 
 // カメラ機能
@@ -427,12 +420,10 @@ const websocketModule = {
         resultImg.onload = () => {
             appState.currentImageData = resultImg;
             
-            // 元の画像サイズで表示（圧縮・固定サイズなし）
             elements.displayCanvas.width = resultImg.naturalWidth;
             elements.displayCanvas.height = resultImg.naturalHeight;
             displayCtx.drawImage(resultImg, 0, 0);
             
-            // フルスクリーン表示中なら同期
             if (appState.isFullscreen) {
                 this.updateFullscreenCanvas(resultImg);
             }
@@ -455,25 +446,23 @@ const websocketModule = {
 
     sendFrame() {
         if (!appState.ws || appState.ws.readyState !== WebSocket.OPEN) {
-            return false; // WebSocket使用不可
+            return false;
         }
 
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
-        // ビデオの元解像度をそのまま使用
         canvas.width = elements.video.videoWidth;
         canvas.height = elements.video.videoHeight;
         ctx.drawImage(elements.video, 0, 0);
         
-        // 圧縮なし（品質1.0）
         canvas.toBlob(blob => {
             if (appState.ws && appState.ws.readyState === WebSocket.OPEN) {
                 appState.ws.send(blob);
             }
         }, 'image/jpeg', 0.8);
 
-        return true; // WebSocket送信成功
+        return true;
     }
 };
 
@@ -485,19 +474,16 @@ const imageModule = {
         appState.isSending = true;
         
         try {
-            // WebSocket優先、失敗時はHTTPにフォールバック
             if (appState.wsConnected) {
                 const success = websocketModule.sendFrame();
-                if (success) return; // WebSocket送信成功
+                if (success) return;
             }
             
-            // HTTPフォールバック
             await this.sendFrameHTTP();
         } catch (error) {
             console.error("画像送信エラー:", error);
             elements.statusDiv.textContent = '⚠️ 通信エラーが発生しました';
         } finally {
-            // WebSocket使用時はhandleMessageでisSendingをfalseにする
             if (!appState.wsConnected) {
                 appState.isSending = false;
             }
@@ -514,19 +500,15 @@ const imageModule = {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
-        // ビデオの元解像度をそのまま使用
         canvas.width = elements.video.videoWidth;
         canvas.height = elements.video.videoHeight;
-        
-        // ビデオをキャンバスに描画
         ctx.drawImage(elements.video, 0, 0);
         
-        // 元のコードと同じ設定（品質0.8）
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
         return blob;
     },
 
-async sendToServer(blob) {
+    async sendToServer(blob) {
         const formData = new FormData();
         formData.append('file', blob, 'capture.jpg');
         
@@ -561,18 +543,13 @@ async sendToServer(blob) {
     },
 
     updateCanvases(resultImg) {
-        // 元画像サイズをそのまま使用（固定サイズなし）
         elements.displayCanvas.width = resultImg.naturalWidth;
         elements.displayCanvas.height = resultImg.naturalHeight;
         
-        // 高品質な描画設定
         displayCtx.imageSmoothingEnabled = true;
         displayCtx.imageSmoothingQuality = 'high';
-        
-        // 画像を元サイズで描画
         displayCtx.drawImage(resultImg, 0, 0);
         
-        // フルスクリーン表示中なら同期
         if (appState.isFullscreen) {
             this.updateFullscreenCanvas(resultImg);
         }
@@ -581,7 +558,6 @@ async sendToServer(blob) {
     updateFullscreenCanvas(resultImg) {
         if (!appState.isFullscreen) return;
         
-        // フルスクリーン時は画面全体に合わせる
         const screenWidth = window.innerWidth;
         const screenHeight = window.innerHeight;
         
@@ -590,24 +566,20 @@ async sendToServer(blob) {
         elements.fullscreenCanvas.style.width = `${screenWidth}px`;
         elements.fullscreenCanvas.style.height = `${screenHeight}px`;
         
-        // 高品質な描画設定
         fullscreenCtx.imageSmoothingEnabled = true;
         fullscreenCtx.imageSmoothingQuality = 'high';
         
-        // アスペクト比を維持してセンタリング
         const imageAspectRatio = resultImg.naturalWidth / resultImg.naturalHeight;
         const screenAspectRatio = screenWidth / screenHeight;
         
         let drawWidth, drawHeight, drawX, drawY;
         
         if (imageAspectRatio > screenAspectRatio) {
-            // 画像が横長：幅を画面に合わせる
             drawWidth = screenWidth;
             drawHeight = screenWidth / imageAspectRatio;
             drawX = 0;
             drawY = (screenHeight - drawHeight) / 2;
         } else {
-            // 画像が縦長：高さを画面に合わせる
             drawWidth = screenHeight * imageAspectRatio;
             drawHeight = screenHeight;
             drawX = (screenWidth - drawWidth) / 2;
@@ -618,7 +590,6 @@ async sendToServer(blob) {
         fullscreenCtx.drawImage(resultImg, drawX, drawY, drawWidth, drawHeight);
     },
 
-    // ウィンドウサイズ変更時の対応
     handleResize() {
         if (appState.currentImageData && appState.isFullscreen) {
             this.updateFullscreenCanvas(appState.currentImageData);
@@ -626,15 +597,9 @@ async sendToServer(blob) {
     }
 };
 
-window.addEventListener('resize', () => {
-    imageModule.handleResize();
-});
-
-// オリエンテーション変更時の処理（モバイル対応）
+window.addEventListener('resize', () => imageModule.handleResize());
 window.addEventListener('orientationchange', () => {
-    setTimeout(() => {
-        imageModule.handleResize();
-    }, 500); // オリエンテーション変更後に少し待つ
+    setTimeout(() => imageModule.handleResize(), 500);
 });
 
 // 音声認識機能
@@ -674,7 +639,6 @@ const speechModule = {
             elements.statusDiv.textContent = "🐟 メダカにお話ししてね！";
             appState.shouldRestart = true;
             
-            // エラー後、自動で録音を再開（3秒後）
             setTimeout(() => {
                 if (appState.shouldRestart && !appState.isRecording) {
                     console.log("[音声エラー] 自動録音再開");
@@ -722,11 +686,9 @@ const speechModule = {
         }
     },
 
-    // セッション状態をチェックして録音開始の処理を分岐
     async startRecording() {
         if (!appState.isRecording && appState.shouldRestart) {
             try {
-                // セッション状態を確認
                 const sessionResponse = await fetch(`${CONFIG.SERVER_URL}/check_session_status`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -736,27 +698,22 @@ const speechModule = {
                 const sessionData = await sessionResponse.json();
                 
                 if (sessionData.has_active_session) {
-                    // 2回目の会話フロー - 直接録音開始
                     console.log("[録音] 2回目フロー - 直接録音開始");
                     this.startDirectRecording();
                 } else if (sessionData.proactive_enabled) {
-                    // 1回目の会話フロー - プロアクティブ機能が有効な場合のみメダカから話しかけ
                     console.log("[録音] 1回目フロー - メダカから話しかけ（プロアクティブ有効）");
                     await this.startWithMedakaGreeting();
                 } else {
-                    // プロアクティブ機能が無効 - 直接録音開始
                     console.log("[録音] 1回目フロー - 直接録音開始（プロアクティブ無効）");
                     this.startDirectRecording();
                 }
             } catch (error) {
                 console.error("セッション状態確認エラー:", error);
-                // エラーの場合は直接録音開始
                 this.startDirectRecording();
             }
         }
     },
 
-    // 直接録音を開始
     startDirectRecording() {
         if (!appState.isRecording && appState.shouldRestart) {
             try {
@@ -769,7 +726,6 @@ const speechModule = {
                 this.updateRecordingUI(false);
                 elements.statusDiv.textContent = "🐟 メダカにお話ししてね！";
                 
-                // エラーの場合も再試行
                 setTimeout(() => {
                     if (appState.shouldRestart && !appState.isRecording) {
                         this.startDirectRecording();
@@ -779,12 +735,10 @@ const speechModule = {
         }
     },
 
-    // メダカの挨拶から始める録音
     async startWithMedakaGreeting() {
         try {
             elements.statusDiv.textContent = "🐟 メダカが話しかけています...";
             
-            // メダカからの挨拶を取得
             const greetingResponse = await fetch(`${CONFIG.SERVER_URL}/get_proactive_message`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -797,7 +751,6 @@ const speechModule = {
             
             await elements.replyAudio.play();
             
-            // メダカの発話が終わったら録音開始
             elements.replyAudio.onended = () => {
                 elements.statusDiv.textContent = "🎤 メダカが話しかけたよ。お返事してね！";
                 setTimeout(() => {
@@ -807,7 +760,6 @@ const speechModule = {
             
         } catch (error) {
             console.error("メダカ挨拶エラー:", error);
-            // エラーの場合は直接録音開始
             this.startDirectRecording();
         }
     },
@@ -841,7 +793,6 @@ const fullscreenModule = {
         document.body.style.overflow = 'hidden';
         elements.canvasFullscreenBtn.textContent = '📱 戻る';
         
-        // 現在の画像をフルスクリーンキャンバスにコピー
         if (appState.currentImageData) {
             this.updateFullscreenCanvas(appState.currentImageData);
         }
@@ -857,7 +808,6 @@ const fullscreenModule = {
     updateFullscreenCanvas(resultImg) {
         if (!appState.isFullscreen) return;
         
-        // フルスクリーン時は画面全体に合わせる
         const screenWidth = window.innerWidth;
         const screenHeight = window.innerHeight;
         
@@ -866,24 +816,20 @@ const fullscreenModule = {
         elements.fullscreenCanvas.style.width = `${screenWidth}px`;
         elements.fullscreenCanvas.style.height = `${screenHeight}px`;
         
-        // 高品質な描画設定
         fullscreenCtx.imageSmoothingEnabled = true;
         fullscreenCtx.imageSmoothingQuality = 'high';
         
-        // アスペクト比を維持してセンタリング
         const imageAspectRatio = resultImg.naturalWidth / resultImg.naturalHeight;
         const screenAspectRatio = screenWidth / screenHeight;
         
         let drawWidth, drawHeight, drawX, drawY;
         
         if (imageAspectRatio > screenAspectRatio) {
-            // 画像が横長：幅を画面に合わせる
             drawWidth = screenWidth;
             drawHeight = screenWidth / imageAspectRatio;
             drawX = 0;
             drawY = (screenHeight - drawHeight) / 2;
         } else {
-            // 画像が縦長：高さを画面に合わせる
             drawWidth = screenHeight * imageAspectRatio;
             drawHeight = screenHeight;
             drawX = (screenWidth - drawWidth) / 2;
@@ -916,11 +862,9 @@ const fullscreenModule = {
 // UI制御機能
 const uiModule = {
     setupRecordingButtons() {
-        // 録音開始ボタン
         [elements.normalRecordBtn, elements.recordBtn].forEach(btn => {
             btn.addEventListener('click', () => speechModule.startRecording());
         });
-        // 録音停止ボタン
         [elements.normalStopBtn, elements.stopBtn].forEach(btn => {
             btn.addEventListener('click', () => speechModule.stopRecording());
         });
@@ -937,30 +881,45 @@ const uiModule = {
                 elements.statusDiv.textContent = "🎤 録音ボタンを押して話しかけてください";
             }, 500);
         });
+    },
+    
+    setupSwitchButton() {
+        elements.switchViewBtn.addEventListener('click', () => {
+            appState.showingAnalysis = !appState.showingAnalysis;
+            
+            if (appState.showingAnalysis) {
+                // 解析結果を表示
+                elements.video.classList.add('hidden');
+                elements.displayCanvas.classList.remove('hidden');
+                elements.switchViewBtn.textContent = '📹 カメラ';
+            } else {
+                // カメラ映像を表示
+                elements.video.classList.remove('hidden');
+                elements.displayCanvas.classList.add('hidden');
+                elements.switchViewBtn.textContent = '📊 解析結果';
+            }
+        });
     }
 };
 
 // アプリケーション初期化・メイン処理
 const app = {
     async init() {
-        // 初期UI状態の設定
         elements.normalControls.classList.add('hidden');
         
-        // 各モジュールの初期化
         await cameraModule.startCamera();
-        websocketModule.init(); // WebSocket接続を初期化
+        websocketModule.init();
         speechModule.init();
         fullscreenModule.setupEventListeners();
         uiModule.setupRecordingButtons();
         uiModule.setupStartButton();
+        uiModule.setupSwitchButton();
         
-        // フレーム送信の定期実行
         setInterval(() => imageModule.sendFrame(), CONFIG.FRAME_RATE);
         
-        // タッチイベントの最適化
         this.optimizeTouchEvents();
         
-        console.log('🐠 魚認識アプリが初期化されました（圧縮・解像度固定なし）');
+        console.log('🐠 魚認識アプリが初期化されました');
     },
 
     optimizeTouchEvents() {
@@ -969,7 +928,6 @@ const app = {
     }
 };
 
-// アプリケーション起動
 app.init();
   </script>
 </body>
