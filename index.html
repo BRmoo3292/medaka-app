@@ -793,8 +793,13 @@ const fullscreenModule = {
         document.body.style.overflow = 'hidden';
         elements.canvasFullscreenBtn.textContent = '📱 戻る';
         
-        if (appState.currentImageData) {
+        // 現在表示されているものを拡大表示
+        if (appState.showingAnalysis && appState.currentImageData) {
+            // 解析結果を表示
             this.updateFullscreenCanvas(appState.currentImageData);
+        } else {
+            // カメラ映像を表示
+            this.displayVideoInFullscreen();
         }
     },
 
@@ -803,10 +808,72 @@ const fullscreenModule = {
         elements.fullscreenContainer.classList.add('hidden');
         document.body.style.overflow = 'auto';
         elements.canvasFullscreenBtn.textContent = '🔍 拡大';
+        
+        // ビデオのフルスクリーン描画を停止
+        if (this.videoRenderInterval) {
+            clearInterval(this.videoRenderInterval);
+            this.videoRenderInterval = null;
+        }
+    },
+
+    displayVideoInFullscreen() {
+        const screenWidth = window.innerWidth;
+        const screenHeight = window.innerHeight;
+        
+        elements.fullscreenCanvas.width = screenWidth;
+        elements.fullscreenCanvas.height = screenHeight;
+        elements.fullscreenCanvas.style.width = `${screenWidth}px`;
+        elements.fullscreenCanvas.style.height = `${screenHeight}px`;
+        
+        fullscreenCtx.imageSmoothingEnabled = true;
+        fullscreenCtx.imageSmoothingQuality = 'high';
+        
+        // ビデオを継続的に描画
+        const renderVideo = () => {
+            if (!appState.isFullscreen) return;
+            
+            const videoWidth = elements.video.videoWidth;
+            const videoHeight = elements.video.videoHeight;
+            
+            if (videoWidth && videoHeight) {
+                const imageAspectRatio = videoWidth / videoHeight;
+                const screenAspectRatio = screenWidth / screenHeight;
+                
+                let drawWidth, drawHeight, drawX, drawY;
+                
+                if (imageAspectRatio > screenAspectRatio) {
+                    drawWidth = screenWidth;
+                    drawHeight = screenWidth / imageAspectRatio;
+                    drawX = 0;
+                    drawY = (screenHeight - drawHeight) / 2;
+                } else {
+                    drawWidth = screenHeight * imageAspectRatio;
+                    drawHeight = screenHeight;
+                    drawX = (screenWidth - drawWidth) / 2;
+                    drawY = 0;
+                }
+                
+                fullscreenCtx.clearRect(0, 0, screenWidth, screenHeight);
+                fullscreenCtx.drawImage(elements.video, drawX, drawY, drawWidth, drawHeight);
+            }
+        };
+        
+        // 30fpsでビデオを描画
+        if (this.videoRenderInterval) {
+            clearInterval(this.videoRenderInterval);
+        }
+        this.videoRenderInterval = setInterval(renderVideo, 33);
+        renderVideo(); // 即座に最初のフレームを描画
     },
 
     updateFullscreenCanvas(resultImg) {
         if (!appState.isFullscreen) return;
+        
+        // ビデオ描画を停止
+        if (this.videoRenderInterval) {
+            clearInterval(this.videoRenderInterval);
+            this.videoRenderInterval = null;
+        }
         
         const screenWidth = window.innerWidth;
         const screenHeight = window.innerHeight;
@@ -851,7 +918,10 @@ const fullscreenModule = {
 
         elements.displayCanvas.addEventListener('click', () => {
             if (!appState.isFullscreen) {
-                this.enterFullscreen();
+                // 解析結果表示中のみクリックで拡大
+                if (appState.showingAnalysis) {
+                    this.enterFullscreen();
+                }
             }
         });
 
