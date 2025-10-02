@@ -650,7 +650,16 @@ const speechModule = {
         this.recognition.onend = () => {
             appState.isRecording = false;
             this.updateRecordingUI(false);
-            if (!appState.shouldRestart) {
+            
+            // shouldRestartがtrueなら自動的に再開
+            if (appState.shouldRestart) {
+                setTimeout(() => {
+                    if (appState.shouldRestart && !appState.isRecording) {
+                        console.log("[音声終了] 自動録音再開");
+                        this.startDirectRecording();
+                    }
+                }, 1000);
+            } else {
                 elements.statusDiv.textContent = "🎤 音声入力 待機中...";
             }
         };
