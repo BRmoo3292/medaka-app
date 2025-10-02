@@ -385,8 +385,6 @@ const cameraModule = {
     }
 };
 
-// WebSocket接続機能
-// WebSocket接続機能
 const websocketModule = {
     init() {
         this.connect();
@@ -398,7 +396,7 @@ const websocketModule = {
         
         appState.ws.onopen = () => {
             appState.wsConnected = true;
-            console.log('WebSocket接続完了');
+            console.log('✅ WebSocket接続完了');
         };
         
         appState.ws.onmessage = (event) => {
@@ -407,12 +405,12 @@ const websocketModule = {
         
         appState.ws.onclose = () => {
             appState.wsConnected = false;
-            console.log('WebSocket接続が切断されました。再接続を試行します...');
-            setTimeout(() => this.connect(), 1000);
+            console.log('⚠️ WebSocket切断 - 再接続中...');
+            setTimeout(() => this.connect(), 2000);
         };
 
         appState.ws.onerror = (error) => {
-            console.error('WebSocket エラー:', error);
+            console.error('❌ WebSocket エラー:', error);
         };
     },
 
@@ -423,17 +421,27 @@ const websocketModule = {
         resultImg.onload = () => {
             appState.currentImageData = resultImg;
             
-            // imageModuleの統一された描画メソッドを使用
-            imageModule.updateCanvases(resultImg);
+            // 通常キャンバスに描画
+            elements.displayCanvas.width = resultImg.naturalWidth;
+            elements.displayCanvas.height = resultImg.naturalHeight;
+            displayCtx.drawImage(resultImg, 0, 0);
+            
+            // フルスクリーン表示中なら同期
+            if (appState.isFullscreen) {
+                imageModule.updateFullscreenCanvas(resultImg);
+            }
             
             URL.revokeObjectURL(imageUrl);
+            
+            // ★重要: 次のフレーム送信を許可
             appState.isSending = false;
         };
         
         resultImg.src = imageUrl;
     },
 
-    sendFrame() {
+    // ★修正: Promiseで確実にBlobを送信
+    async sendFrame() {
         if (!appState.ws || appState.ws.readyState !== WebSocket.OPEN) {
             return false;
         }
@@ -441,41 +449,50 @@ const websocketModule = {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
-        canvas.width = elements.video.videoWidth;
-        canvas.height = elements.video.videoHeight;
-        ctx.drawImage(elements.video, 0, 0);
+        canvas.width = 640;
+        canvas.height = 480;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(elements.video, 0, 0, 640, 480);
         
-        canvas.toBlob(blob => {
-            if (appState.ws && appState.ws.readyState === WebSocket.OPEN) {
-                appState.ws.send(blob);
-            }
-        }, 'image/jpeg', 0.8);
-
-        return true;
+        // Promiseでblob生成を待つ
+        const blob = await new Promise(resolve => {
+            canvas.toBlob(resolve, 'image/jpeg', 0.6);
+        });
+        
+        if (appState.ws && appState.ws.readyState === WebSocket.OPEN && blob) {
+            appState.ws.send(blob);
+            return true;
+        }
+        
+        return false;
     }
 };
 
 // 画像処理・送信機能
 const imageModule = {
     async sendFrame() {
-        if (appState.isSending || !elements.video.videoWidth || !elements.video.videoHeight) return;
+        if (appState.isSending || !elements.video.videoWidth || !elements.video.videoHeight) {
+            return; // 送信中または動画未準備
+        }
         
         appState.isSending = true;
         
         try {
+            // WebSocket優先
             if (appState.wsConnected) {
-                const success = websocketModule.sendFrame();
-                if (success) return;
+                const success = await websocketModule.sendFrame();
+                if (success) {
+                    // handleMessageでisSendingをfalseにする
+                    return;
+                }
             }
             
+            // HTTPフォールバック
             await this.sendFrameHTTP();
         } catch (error) {
             console.error("画像送信エラー:", error);
-            elements.statusDiv.textContent = '⚠️ 通信エラーが発生しました';
-        } finally {
-            if (!appState.wsConnected) {
-                appState.isSending = false;
-            }
+            appState.isSending = false; // エラー時は解放
         }
     },
 
@@ -489,25 +506,35 @@ const imageModule = {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         
+        // ビデオの元解像度をそのまま使用
         canvas.width = elements.video.videoWidth;
         canvas.height = elements.video.videoHeight;
+        
+        // ビデオをキャンバスに描画
         ctx.drawImage(elements.video, 0, 0);
         
+        // 元のコードと同じ設定（品質0.8）
         const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
         return blob;
     },
 
-    async sendToServer(blob) {
+async sendToServer(blob) {
         const formData = new FormData();
         formData.append('file', blob, 'capture.jpg');
         
-        const response = await fetch(`${CONFIG.SERVER_URL}/predict`, {
-            method: 'POST',
-            body: formData,
-        });
-        
-        if (!response.ok) throw new Error('サーバーエラー');
-        return await response.blob();
+        try {
+            const response = await fetch(`${CONFIG.SERVER_URL}/predict`, {
+                method: 'POST',
+                body: formData,
+            });
+            
+            if (!response.ok) throw new Error('サーバーエラー');
+            
+            return await response.blob();
+        } catch (error) {
+            console.error('サーバー通信エラー:', error);
+            throw error;
+        }
     },
 
     async displayResult(resultBlob) {
@@ -525,13 +552,16 @@ const imageModule = {
         });
     },
 
-    // 通常表示とフルスクリーン表示を統一的に更新
     updateCanvases(resultImg) {
-        // 通常表示の更新
+        // 元画像サイズをそのまま使用（固定サイズなし）
         elements.displayCanvas.width = resultImg.naturalWidth;
         elements.displayCanvas.height = resultImg.naturalHeight;
+        
+        // 高品質な描画設定
         displayCtx.imageSmoothingEnabled = true;
         displayCtx.imageSmoothingQuality = 'high';
+        
+        // 画像を元サイズで描画
         displayCtx.drawImage(resultImg, 0, 0);
         
         // フルスクリーン表示中なら同期
@@ -543,6 +573,7 @@ const imageModule = {
     updateFullscreenCanvas(resultImg) {
         if (!appState.isFullscreen) return;
         
+        // フルスクリーン時は画面全体に合わせる
         const screenWidth = window.innerWidth;
         const screenHeight = window.innerHeight;
         
@@ -551,20 +582,24 @@ const imageModule = {
         elements.fullscreenCanvas.style.width = `${screenWidth}px`;
         elements.fullscreenCanvas.style.height = `${screenHeight}px`;
         
+        // 高品質な描画設定
         fullscreenCtx.imageSmoothingEnabled = true;
         fullscreenCtx.imageSmoothingQuality = 'high';
         
+        // アスペクト比を維持してセンタリング
         const imageAspectRatio = resultImg.naturalWidth / resultImg.naturalHeight;
         const screenAspectRatio = screenWidth / screenHeight;
         
         let drawWidth, drawHeight, drawX, drawY;
         
         if (imageAspectRatio > screenAspectRatio) {
+            // 画像が横長：幅を画面に合わせる
             drawWidth = screenWidth;
             drawHeight = screenWidth / imageAspectRatio;
             drawX = 0;
             drawY = (screenHeight - drawHeight) / 2;
         } else {
+            // 画像が縦長：高さを画面に合わせる
             drawWidth = screenHeight * imageAspectRatio;
             drawHeight = screenHeight;
             drawX = (screenWidth - drawWidth) / 2;
@@ -575,6 +610,7 @@ const imageModule = {
         fullscreenCtx.drawImage(resultImg, drawX, drawY, drawWidth, drawHeight);
     },
 
+    // ウィンドウサイズ変更時の対応
     handleResize() {
         if (appState.currentImageData && appState.isFullscreen) {
             this.updateFullscreenCanvas(appState.currentImageData);

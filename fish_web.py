@@ -143,37 +143,42 @@ active_connections = []
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    active_connections.append(websocket)
-    print(f"[WebSocket] 新規接続 (合計: {len(active_connections)})")
+    print(f"[WebSocket] 新規接続")
     
     try:
         while True:
             # バイナリデータ（画像）を受信
             image_data = await websocket.receive_bytes()
             
-            # 推論サーバーに送信
-            client = httpx.AsyncClient(timeout=30.0)
-            files = {"file": ("frame.jpg", io.BytesIO(image_data), "image/jpeg")}
-            
-            response = await client.post(
-                f"{INFERENCE_SERVER_URL}/predict", 
-                files=files
-            )
-            
-            if response.status_code == 200:
-                # 結果をそのまま送り返す
-                await websocket.send_bytes(response.content)
-            
-            await client.aclose()
+            # 推論サーバーに送信（非同期処理）
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                files = {"file": ("frame.jpg", io.BytesIO(image_data), "image/jpeg")}
+                
+                try:
+                    response = await client.post(
+                        f"{INFERENCE_SERVER_URL}/predict", 
+                        files=files
+                    )
+                    
+                    if response.status_code == 200:
+                        # 結果を即座に送り返す
+                        await websocket.send_bytes(response.content)
+                    else:
+                        print(f"[WebSocket] 推論エラー: {response.status_code}")
+                        
+                except httpx.TimeoutException:
+                    print(f"[WebSocket] タイムアウト")
+                except Exception as e:
+                    print(f"[WebSocket] 推論エラー: {e}")
             
     except WebSocketDisconnect:
-        active_connections.remove(websocket)
-        print(f"[WebSocket] 切断 (残り: {len(active_connections)})")
+        print(f"[WebSocket] 切断")
     except Exception as e:
         print(f"[WebSocket] エラー: {e}")
-        if websocket in active_connections:
-            active_connections.remove(websocket)
-
+        try:
+            await websocket.close()
+        except:
+            pass
 #ベクトル検索の関数
 async def find_similar_conversation(user_input: str,development_stage: str):
         # ユーザー入力をベクトル化
