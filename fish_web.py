@@ -128,7 +128,154 @@ def connect_to_database(db_url, max_retries=3):
             break
     
     return None
+@app.post("/transcribe_audio")
+async def transcribe_audio(file: UploadFile):
+    """Whisper APIで音声をテキストに変換"""
+    start = time.time()
+    
+    try:
+        # 音声ファイルを一時保存
+        audio_content = await file.read()
+        
+        # Whisper APIで文字起こし
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_audio:
+            temp_audio.write(audio_content)
+            temp_audio_path = temp_audio.name
+        
+        with open(temp_audio_path, "rb") as audio_file:
+            transcript = await openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="ja",
+                response_format="verbose_json"  # タイムスタンプなど詳細情報を取得
+            )
+        
+        # 一時ファイル削除
+        os.unlink(temp_audio_path)
+        
+        end = time.time()
+        print(f"[Whisper] 文字起こし完了: '{transcript.text}' ({end - start:.2f}秒)")
+        
+        return {
+            "text": transcript.text,
+            "duration": transcript.duration,
+            "language": transcript.language
+        }
+        
+    except Exception as e:
+        print(f"[Whisper] エラー: {e}")
+        raise HTTPException(status_code=500, detail=f"Transcription error: {str(e)}")
 
+@app.post("/talk_with_fish_audio")
+async def talk_with_fish_audio(file: UploadFile):
+    """音声ファイルを受け取り、Whisperで文字起こし後、メダカの応答を返す"""
+    start_total = time.time()
+    
+    try:
+        # 1. Whisperで文字起こし
+        transcription_result = await transcribe_audio(file)
+        user_input = transcription_result["text"]
+        
+        if not user_input.strip():
+            raise HTTPException(400, "No speech detected")
+        
+        print(f"[音声認識] ユーザー入力: '{user_input}'")
+        
+        # 2. 既存の会話処理ロジックを使用
+        # （既存の /talk_with_fish_text の処理をここに統合）
+        
+        # プロファイル取得
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT * FROM profiles WHERE id = %s;", (CURRENT_PROFILE_ID,))
+            profile = cur.fetchone()
+            if not profile:
+                raise HTTPException(404, "Profile not found")
+            current_stage = profile["development_stage"]
+        
+        # 会話履歴取得
+        if CURRENT_PROFILE_ID not in conversation_history:
+            conversation_history[CURRENT_PROFILE_ID] = []
+        current_history = conversation_history[CURRENT_PROFILE_ID]
+        
+        session = active_session.get(CURRENT_PROFILE_ID)
+        assessment_result = None
+        similar_example = None
+        
+        if session is None:
+            # 1回目の会話
+            print("[会話フロー] 1回目の会話 - 類似例を検索")
+            similar_example = await find_similar_conversation(user_input, current_stage)
+            reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
+            
+            if (similar_example and 
+                'child_reply_1_embedding' in similar_example and 
+                similar_example['distance'] < 0.5):
+                session = ConversationSession(
+                    profile_id=CURRENT_PROFILE_ID,
+                    first_input=user_input,
+                    medaka_response=reply_text,
+                    similar_example=similar_example,
+                    current_stage=current_stage
+                )
+                active_session[CURRENT_PROFILE_ID] = session
+        else:
+            # 2回目の会話 - 発達段階判定
+            print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
+            assessment = await classify_child_response(
+                user_input,
+                session.similar_example,
+                openai_client,
+            )
+            assessment_result = {
+                'result': assessment[0],
+                'maintain_score': round(float(assessment[1]), 3),
+                'upgrade_score': round(float(assessment[2]), 3),
+                'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),
+                'assessed_at': datetime.now(),
+            }
+            reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
+            session_id = session.complete_session(user_input, assessment)
+            del active_session[CURRENT_PROFILE_ID]
+        
+        # 会話履歴に追加
+        conversation_entry = {
+            "child": user_input,
+            "medaka": reply_text,
+            "timestamp": datetime.now(),
+            "similar_example_used": similar_example['text'] if similar_example else None,
+            "similarity_score": similar_example['distance'] if similar_example else None,
+            "has_assessment": assessment_result is not None,
+            "assessment_result": assessment_result,
+            "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
+        }
+        conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
+        
+        # 3. TTS生成
+        async with openai_client.audio.speech.with_streaming_response.create(
+            model="gpt-4o-mini-tts",
+            voice="coral",
+            instructions="""
+            Voice Affect:のんびりしていて、かわいらしい無邪気さ  
+            Tone:ほんわか、少しおっとり、親しみやすい  
+            Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+            """,
+            speed=1.0,
+            input=reply_text,
+            response_format="mp3",
+        ) as response:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
+                async for chunk in response.iter_bytes():
+                    tts_file.write(chunk)
+                tts_path = tts_file.name
+        
+        end_total = time.time()
+        print(f"[総処理時間] {end_total - start_total:.2f}秒")
+        
+        return FileResponse(tts_path, media_type="audio/mpeg", filename="reply.mp3")
+        
+    except Exception as e:
+        print(f"[音声処理エラー] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 # データベース接続
 try:
     pg_conn = connect_to_database(DB_URL)

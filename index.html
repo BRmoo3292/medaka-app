@@ -604,100 +604,18 @@ window.addEventListener('orientationchange', () => {
 
 // 音声認識機能
 const speechModule = {
-    recognition: null,
+    mediaRecorder: null,
+    audioChunks: [],
 
     init() {
-        this.recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-        this.recognition.lang = "ja-JP";
-        this.recognition.interimResults = false;
-        this.recognition.continuous = false;
-        
-        this.setupEventListeners();
-    },
-
-    setupEventListeners() {
-        this.recognition.onstart = () => {
-            elements.statusDiv.textContent = "🎤 聞いています...";
-            appState.isRecording = true;
-            this.updateRecordingUI(true);
-        };
-
-        this.recognition.onresult = async (event) => {
-            appState.shouldRestart = true;
-            appState.isRecording = false;
-            this.updateRecordingUI(false);
-            
-            const transcript = event.results[0][0].transcript;
-            elements.statusDiv.textContent = `🗣️ あなた: ${transcript}`;
-            
-            await this.sendTextToServer(transcript);
-        };
-
-        this.recognition.onerror = (event) => {
-            appState.isRecording = false;
-            this.updateRecordingUI(false);
-            elements.statusDiv.textContent = "🐟 メダカにお話ししてね！";
-            appState.shouldRestart = true;
-            
-            setTimeout(() => {
-                if (appState.shouldRestart && !appState.isRecording) {
-                    console.log("[音声エラー] 自動録音再開");
-                    this.startDirectRecording();
-                }
-            }, 3000);
-        };
-
-        this.recognition.onend = () => {
-            appState.isRecording = false;
-            this.updateRecordingUI(false);
-            
-            // shouldRestartがtrueなら自動的に再開
-            if (appState.shouldRestart) {
-                setTimeout(() => {
-                    if (appState.shouldRestart && !appState.isRecording) {
-                        console.log("[音声終了] 自動録音再開");
-                        this.startDirectRecording();
-                    }
-                }, 1000);
-            } else {
-                elements.statusDiv.textContent = "🎤 音声入力 待機中...";
-            }
-        };
-    },
-
-    async sendTextToServer(transcript) {
-        try {
-            const response = await fetch(`${CONFIG.SERVER_URL}/talk_with_fish_text`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_input: transcript,
-                    profile_id: CONFIG.PROFILE_ID
-                })
-            });
-            
-            const audioBlob = await response.blob();
-            const audioUrl = URL.createObjectURL(audioBlob);
-            elements.replyAudio.src = audioUrl;
-            elements.replyAudio.play();
-            
-            elements.replyAudio.onended = () => {
-                elements.statusDiv.textContent = "🎤 音声入力 待機中...";
-                setTimeout(() => {
-                    if (appState.shouldRestart && !appState.isRecording) {
-                        // 自動再開はせず、ユーザーの操作を待つ
-                    }
-                }, 1000);
-            };
-        } catch (error) {
-            console.error("音声送信エラー:", error);
-            elements.statusDiv.textContent = '⚠️ 音声処理エラーが発生しました';
-        }
+        // Web Speech APIの代わりにMediaRecorder APIを使用
+        console.log('[音声] Whisper API モードで初期化');
     },
 
     async startRecording() {
         if (!appState.isRecording && appState.shouldRestart) {
             try {
+                // セッション状態確認（既存のロジック）
                 const sessionResponse = await fetch(`${CONFIG.SERVER_URL}/check_session_status`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -708,43 +626,107 @@ const speechModule = {
                 
                 if (sessionData.has_active_session) {
                     console.log("[録音] 2回目フロー - 直接録音開始");
-                    this.startDirectRecording();
+                    await this.startDirectRecording();
                 } else if (sessionData.proactive_enabled) {
-                    console.log("[録音] 1回目フロー - メダカから話しかけ（プロアクティブ有効）");
+                    console.log("[録音] 1回目フロー - メダカから話しかけ");
                     await this.startWithMedakaGreeting();
                 } else {
-                    console.log("[録音] 1回目フロー - 直接録音開始（プロアクティブ無効）");
-                    this.startDirectRecording();
+                    console.log("[録音] 1回目フロー - 直接録音開始");
+                    await this.startDirectRecording();
                 }
             } catch (error) {
                 console.error("セッション状態確認エラー:", error);
-                this.startDirectRecording();
+                await this.startDirectRecording();
             }
         }
     },
 
-    startDirectRecording() {
-        if (!appState.isRecording && appState.shouldRestart) {
-            try {
-                appState.isRecording = true;
-                this.recognition.start();
-                this.updateRecordingUI(true);
-            } catch (error) {
-                console.error("録音開始エラー:", error);
-                appState.isRecording = false;
-                this.updateRecordingUI(false);
-                elements.statusDiv.textContent = "🐟 メダカにお話ししてね！";
+    async startDirectRecording() {
+        if (appState.isRecording) return;
+        
+        try {
+            // マイクへのアクセス
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            // MediaRecorderの初期化
+            this.mediaRecorder = new MediaRecorder(stream, {
+                mimeType: 'audio/webm'
+            });
+            
+            this.audioChunks = [];
+            
+            this.mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    this.audioChunks.push(event.data);
+                }
+            };
+            
+            this.mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+                await this.sendAudioToServer(audioBlob);
                 
-                setTimeout(() => {
-                    if (appState.shouldRestart && !appState.isRecording) {
-                        this.startDirectRecording();
-                    }
-                }, 3000);
+                // ストリームを停止
+                stream.getTracks().forEach(track => track.stop());
+            };
+            
+            // 録音開始
+            this.mediaRecorder.start();
+            appState.isRecording = true;
+            this.updateRecordingUI(true);
+            elements.statusDiv.textContent = "🎤 聞いています...";
+            
+            console.log('[録音] 開始');
+            
+        } catch (error) {
+            console.error("録音開始エラー:", error);
+            elements.statusDiv.textContent = "⚠️ マイクへのアクセスが拒否されました";
+        }
+    },
+
+    stopRecording() {
+        if (this.mediaRecorder && appState.isRecording) {
+            this.mediaRecorder.stop();
+            appState.isRecording = false;
+            appState.shouldRestart = false;
+            this.updateRecordingUI(false);
+            elements.statusDiv.textContent = "🔄 処理中...";
+            console.log('[録音] 停止');
+        }
+    },
+
+    async sendAudioToServer(audioBlob) {
+        try {
+            elements.statusDiv.textContent = "🔄 音声を認識しています...";
+            
+            const formData = new FormData();
+            formData.append('file', audioBlob, 'recording.webm');
+            
+            const response = await fetch(`${CONFIG.SERVER_URL}/talk_with_fish_audio`, {
+                method: "POST",
+                body: formData
+            });
+            
+            if (!response.ok) {
+                throw new Error('サーバーエラー');
             }
+            
+            const audioResponseBlob = await response.blob();
+            const audioUrl = URL.createObjectURL(audioResponseBlob);
+            elements.replyAudio.src = audioUrl;
+            elements.replyAudio.play();
+            
+            elements.replyAudio.onended = () => {
+                elements.statusDiv.textContent = "🎤 音声入力 待機中...";
+            };
+            
+        } catch (error) {
+            console.error("音声送信エラー:", error);
+            elements.statusDiv.textContent = '⚠️ 音声処理エラーが発生しました';
         }
     },
 
     async startWithMedakaGreeting() {
+        // 既存のロジックをそのまま使用
         try {
             elements.statusDiv.textContent = "🐟 メダカが話しかけています...";
             
@@ -773,15 +755,6 @@ const speechModule = {
         }
     },
 
-    stopRecording() {
-        if (appState.isRecording) {
-            appState.isRecording = false;
-            appState.shouldRestart = false;
-            this.recognition.stop();
-            this.updateRecordingUI(false);
-        }
-    },
-
     updateRecordingUI(recording) {
         const buttons = [elements.normalRecordBtn, elements.recordBtn];
         buttons.forEach(btn => {
@@ -793,7 +766,6 @@ const speechModule = {
         });
     }
 };
-
 // フルスクリーン機能
 const fullscreenModule = {
     enterFullscreen() {
@@ -1010,4 +982,4 @@ const app = {
 app.init();
   </script>
 </body>
-</html>
+</html>x
