@@ -610,6 +610,7 @@ const speechModule = {
     silenceTimeout: null,
     stream: null,
     isListening: false,
+    vadPaused: false,  // 🆕 VAD一時停止フラグ
     
     // VAD設定
     SILENCE_THRESHOLD: 0.01,
@@ -769,12 +770,29 @@ const speechModule = {
             appState.isRecording = false;
             elements.statusDiv.classList.remove('recording');
             elements.statusDiv.textContent = "🔄 処理中...";
+            
+            // 🔒 録音停止したら一時的にVADを停止
+            this.pauseVAD();
+            
             console.log('[録音] 停止');
         }
     },
 
+    pauseVAD() {
+        // VAD監視を一時停止（isListeningはtrueのまま、音声検出だけ無効化）
+        this.vadPaused = true;
+        console.log('[VAD] 一時停止 - メダカの応答待ち');
+    },
+
+    resumeVAD() {
+        // VAD監視を再開
+        this.vadPaused = false;
+        console.log('[VAD] 再開 - 次の音声を待機');
+    },
+
     stopListening() {
         this.isListening = false;
+        this.vadPaused = false;
         
         if (this.silenceTimeout) {
             clearTimeout(this.silenceTimeout);
