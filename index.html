@@ -665,6 +665,7 @@ const speechModule = {
             source.connect(this.analyser);
             
             this.isListening = true;
+            this.vadPaused = false;  // 🆕 初期化
             elements.statusDiv.textContent = "🎤 話しかけてください...";
             elements.statusDiv.classList.remove('recording');
             console.log('[VAD] 音声検出開始');
@@ -781,13 +782,13 @@ const speechModule = {
     pauseVAD() {
         // VAD監視を一時停止（isListeningはtrueのまま、音声検出だけ無効化）
         this.vadPaused = true;
-        console.log('[VAD] 一時停止 - メダカの応答待ち');
+        console.log('[VAD] 🔒 一時停止 - メダカの応答待ち');
     },
 
     resumeVAD() {
         // VAD監視を再開
         this.vadPaused = false;
-        console.log('[VAD] 再開 - 次の音声を待機');
+        console.log('[VAD] ✅ 再開 - 次の音声を待機');
     },
 
     stopListening() {
@@ -817,6 +818,7 @@ const speechModule = {
     async sendAudioToServer(audioBlob) {
         try {
             elements.statusDiv.textContent = "🔄 音声を認識しています...";
+            console.log('[サーバー送信] 音声データ送信中...');
             
             const formData = new FormData();
             formData.append('file', audioBlob, 'recording.webm');
@@ -830,20 +832,36 @@ const speechModule = {
                 throw new Error('サーバーエラー');
             }
             
+            console.log('[サーバー送信] 応答受信完了');
+            
             const audioResponseBlob = await response.blob();
             const audioUrl = URL.createObjectURL(audioResponseBlob);
-            elements.replyAudio.src = audioUrl;
-            elements.replyAudio.play();
             
+            // 🐟 メダカの音声再生開始
+            elements.statusDiv.textContent = "🐟 メダカが話しています...";
+            console.log('[メダカ応答] 音声再生開始');
+            
+            elements.replyAudio.src = audioUrl;
+            
+            // 再生が始まったことを確実に検知
+            elements.replyAudio.onloadeddata = () => {
+                console.log('[メダカ応答] 音声データ読み込み完了');
+            };
+            
+            await elements.replyAudio.play();
+            console.log('[メダカ応答] play()実行完了');
+            
+            // 🎧 メダカの音声が終わったらVADを再開
             elements.replyAudio.onended = () => {
+                console.log('[メダカ応答] 音声再生終了');
                 elements.statusDiv.textContent = "🎤 話しかけてください...";
                 appState.shouldRestart = true;
                 
-                setTimeout(() => {
-                    if (appState.shouldRestart && !appState.isRecording && this.isListening) {
-                        console.log('[VAD] 次の音声を待機');
-                    }
-                }, 500);
+                // ✅ メダカが話し終わったのでVADを再開
+                if (this.isListening) {
+                    this.resumeVAD();
+                    console.log('[会話] メダカの応答完了 - 次の音声を待機');
+                }
             };
             
         } catch (error) {
@@ -851,9 +869,12 @@ const speechModule = {
             elements.statusDiv.textContent = '⚠️ 音声処理エラーが発生しました';
             appState.shouldRestart = true;
             
+            // エラー時もVADを再開
             setTimeout(() => {
                 if (appState.shouldRestart && this.isListening) {
+                    this.resumeVAD();
                     elements.statusDiv.textContent = "🎤 話しかけてください...";
+                    console.log('[エラー復帰] VAD再開');
                 }
             }, 2000);
         }
