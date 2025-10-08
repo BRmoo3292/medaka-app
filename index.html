@@ -727,6 +727,12 @@ const speechModule = {
     async startDirectRecording() {
         if (appState.isRecording) return;
         
+        // 🔒 VADが一時停止中は録音開始しない
+        if (this.vadPaused) {
+            console.log('[録音] スキップ - VAD一時停止中');
+            return;
+        }
+        
         try {
             this.recordingStartTime = Date.now();
             
