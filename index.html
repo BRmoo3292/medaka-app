@@ -150,21 +150,6 @@
       backdrop-filter: blur(10px);
     }
     
-    .record-button {
-      background: linear-gradient(135deg, #ff6b6b, #ee5a24);
-      color: white;
-    }
-    
-    .record-button.recording {
-      background: linear-gradient(135deg, #ff3838, #c23616);
-      animation: pulse 1.5s infinite;
-    }
-    
-    .stop-button {
-      background: linear-gradient(135deg, #555, #333);
-      color: white;
-    }
-    
     .exit-button {
       background: linear-gradient(135deg, #2c2c54, #40407a);
       color: white;
@@ -176,9 +161,18 @@
     }
     
     @keyframes pulse {
-      0% { transform: scale(1); }
-      50% { transform: scale(1.1); }
-      100% { transform: scale(1); }
+      0% { 
+        transform: scale(1); 
+        box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.7);
+      }
+      50% { 
+        transform: scale(1.05); 
+        box-shadow: 0 0 20px 10px rgba(255, 107, 107, 0);
+      }
+      100% { 
+        transform: scale(1); 
+        box-shadow: 0 0 0 0 rgba(255, 107, 107, 0);
+      }
     }
     
     .status-section {
@@ -196,6 +190,12 @@
       font-size: 14px;
       font-weight: 500;
       border: 1px solid rgba(255,255,255,0.2);
+      transition: all 0.3s ease;
+    }
+    
+    #status.recording {
+      background: linear-gradient(135deg, rgba(255, 107, 107, 0.3), rgba(238, 90, 36, 0.3));
+      animation: pulse 1.5s infinite;
     }
     
     #startButton {
@@ -221,15 +221,15 @@
       transform: translateY(0);
     }
     
-    .normal-controls {
+    .vad-controls {
       display: flex;
       gap: 15px;
       margin-top: 15px;
+      justify-content: center;
     }
     
-    .normal-control-button {
-      flex: 1;
-      padding: 12px 20px;
+    .vad-button {
+      padding: 12px 24px;
       border: none;
       border-radius: 20px;
       font-size: 14px;
@@ -239,20 +239,24 @@
       backdrop-filter: blur(10px);
     }
     
-    .normal-record-button {
+    .vad-start-button {
+      background: linear-gradient(135deg, #11998e, #38ef7d);
+      color: white;
+    }
+    
+    .vad-start-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(17, 153, 142, 0.4);
+    }
+    
+    .vad-stop-button {
       background: linear-gradient(135deg, #ff6b6b, #ee5a24);
       color: white;
     }
     
-    .normal-record-button.recording {
-      background: linear-gradient(135deg, #ff3838, #c23616);
-      animation: pulse 1.5s infinite;
-    }
-    
-    .normal-stop-button {
-      background: rgba(255,255,255,0.2);
-      color: white;
-      border: 1px solid rgba(255,255,255,0.3);
+    .vad-stop-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
     }
     
     .hidden {
@@ -302,9 +306,9 @@
     <div class="status-section">
       <div id="status">🎤 音声入力 待機中...</div>
       
-      <div class="normal-controls" id="normalControls">
-        <button class="normal-control-button normal-record-button" id="normalRecordBtn">🎤 録音</button>
-        <button class="normal-control-button normal-stop-button" id="normalStopBtn">⏹️ 停止</button>
+      <div class="vad-controls hidden" id="vadControls">
+        <button class="vad-button vad-start-button" id="vadStartBtn">🎤 音声検出開始</button>
+        <button class="vad-button vad-stop-button" id="vadStopBtn">⏹️ 音声検出停止</button>
       </div>
       
       <button id="startButton">🚀 会話を始める</button>
@@ -314,8 +318,6 @@
   <div class="fullscreen-container hidden" id="fullscreenContainer">
     <canvas id="fullscreenCanvas"></canvas>
     <div class="fullscreen-controls">
-      <button class="control-button record-button" id="recordBtn">🎤</button>
-      <button class="control-button stop-button" id="stopBtn">⏹️</button>
       <button class="control-button exit-button" id="exitBtn">✕</button>
     </div>
   </div>
@@ -340,11 +342,9 @@ const elements = {
     canvasFullscreenBtn: document.getElementById("canvasFullscreenBtn"),
     fullscreenContainer: document.getElementById("fullscreenContainer"),
     startButton: document.getElementById("startButton"),
-    normalControls: document.getElementById("normalControls"),
-    normalRecordBtn: document.getElementById("normalRecordBtn"),
-    normalStopBtn: document.getElementById("normalStopBtn"),
-    recordBtn: document.getElementById("recordBtn"),
-    stopBtn: document.getElementById("stopBtn"),
+    vadControls: document.getElementById("vadControls"),
+    vadStartBtn: document.getElementById("vadStartBtn"),
+    vadStopBtn: document.getElementById("vadStopBtn"),
     exitBtn: document.getElementById("exitBtn"),
     switchViewBtn: document.getElementById("switchViewBtn")
 };
@@ -482,7 +482,6 @@ const imageModule = {
             await this.sendFrameHTTP();
         } catch (error) {
             console.error("画像送信エラー:", error);
-            elements.statusDiv.textContent = '⚠️ 通信エラーが発生しました';
         } finally {
             if (!appState.wsConnected) {
                 appState.isSending = false;
@@ -602,54 +601,134 @@ window.addEventListener('orientationchange', () => {
     setTimeout(() => imageModule.handleResize(), 500);
 });
 
-// 音声認識機能
+// VAD音声認識機能
 const speechModule = {
     mediaRecorder: null,
     audioChunks: [],
+    audioContext: null,
+    analyser: null,
+    silenceTimeout: null,
+    stream: null,
+    isListening: false,
+    
+    // VAD設定
+    SILENCE_THRESHOLD: 0.01,
+    SILENCE_DURATION: 1500,
+    VOICE_THRESHOLD: 0.02,
+    MIN_RECORDING_TIME: 500,
+    recordingStartTime: null,
 
     init() {
-        // Web Speech APIの代わりにMediaRecorder APIを使用
-        console.log('[音声] Whisper API モードで初期化');
+        console.log('[音声] Whisper API + VAD モードで初期化');
     },
 
-    async startRecording() {
-        if (!appState.isRecording && appState.shouldRestart) {
-            try {
-                // セッション状態確認（既存のロジック）
-                const sessionResponse = await fetch(`${CONFIG.SERVER_URL}/check_session_status`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ profile_id: CONFIG.PROFILE_ID })
-                });
-                
-                const sessionData = await sessionResponse.json();
-                
-                if (sessionData.has_active_session) {
-                    console.log("[録音] 2回目フロー - 直接録音開始");
-                    await this.startDirectRecording();
-                } else if (sessionData.proactive_enabled) {
-                    console.log("[録音] 1回目フロー - メダカから話しかけ");
-                    await this.startWithMedakaGreeting();
-                } else {
-                    console.log("[録音] 1回目フロー - 直接録音開始");
-                    await this.startDirectRecording();
-                }
-            } catch (error) {
-                console.error("セッション状態確認エラー:", error);
-                await this.startDirectRecording();
+    async startListening() {
+        if (this.isListening) return;
+        
+        try {
+            const sessionResponse = await fetch(`${CONFIG.SERVER_URL}/check_session_status`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ profile_id: CONFIG.PROFILE_ID })
+            });
+            
+            const sessionData = await sessionResponse.json();
+            
+            if (sessionData.has_active_session) {
+                console.log("[音声待機] 2回目フロー - 音声検出待機開始");
+                await this.startVoiceDetection();
+            } else if (sessionData.proactive_enabled) {
+                console.log("[音声待機] 1回目フロー - メダカから話しかけ");
+                await this.startWithMedakaGreeting();
+            } else {
+                console.log("[音声待機] 1回目フロー - 音声検出待機開始");
+                await this.startVoiceDetection();
             }
+        } catch (error) {
+            console.error("セッション状態確認エラー:", error);
+            await this.startVoiceDetection();
         }
+    },
+
+    async startVoiceDetection() {
+        if (this.isListening) return;
+        
+        try {
+            this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.analyser = this.audioContext.createAnalyser();
+            this.analyser.fftSize = 2048;
+            
+            const source = this.audioContext.createMediaStreamSource(this.stream);
+            source.connect(this.analyser);
+            
+            this.isListening = true;
+            elements.statusDiv.textContent = "🎤 話しかけてください...";
+            elements.statusDiv.classList.remove('recording');
+            console.log('[VAD] 音声検出開始');
+            
+            this.monitorVoiceLevel();
+            
+        } catch (error) {
+            console.error("音声検出開始エラー:", error);
+            elements.statusDiv.textContent = "⚠️ マイクへのアクセスが拒否されました";
+        }
+    },
+
+    monitorVoiceLevel() {
+        const bufferLength = this.analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        
+        const checkVoice = () => {
+            if (!this.isListening) return;
+            
+            this.analyser.getByteTimeDomainData(dataArray);
+            
+            let sum = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                const normalized = (dataArray[i] - 128) / 128;
+                sum += normalized * normalized;
+            }
+            const rms = Math.sqrt(sum / bufferLength);
+            
+            if (!appState.isRecording && rms > this.VOICE_THRESHOLD) {
+                console.log('[VAD] 音声検出! レベル:', rms.toFixed(4));
+                this.startDirectRecording();
+            }
+            
+            if (appState.isRecording) {
+                if (rms < this.SILENCE_THRESHOLD) {
+                    if (!this.silenceTimeout) {
+                        this.silenceTimeout = setTimeout(() => {
+                            const recordingDuration = Date.now() - this.recordingStartTime;
+                            if (recordingDuration >= this.MIN_RECORDING_TIME) {
+                                console.log('[VAD] 無音検出 - 録音停止');
+                                this.stopRecording();
+                            }
+                        }, this.SILENCE_DURATION);
+                    }
+                } else {
+                    if (this.silenceTimeout) {
+                        clearTimeout(this.silenceTimeout);
+                        this.silenceTimeout = null;
+                    }
+                }
+            }
+            
+            requestAnimationFrame(checkVoice);
+        };
+        
+        checkVoice();
     },
 
     async startDirectRecording() {
         if (appState.isRecording) return;
         
         try {
-            // マイクへのアクセス
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            this.recordingStartTime = Date.now();
             
-            // MediaRecorderの初期化
-            this.mediaRecorder = new MediaRecorder(stream, {
+            this.mediaRecorder = new MediaRecorder(this.stream, {
                 mimeType: 'audio/webm'
             });
             
@@ -664,34 +743,57 @@ const speechModule = {
             this.mediaRecorder.onstop = async () => {
                 const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
                 await this.sendAudioToServer(audioBlob);
-                
-                // ストリームを停止
-                stream.getTracks().forEach(track => track.stop());
             };
             
-            // 録音開始
             this.mediaRecorder.start();
             appState.isRecording = true;
-            this.updateRecordingUI(true);
             elements.statusDiv.textContent = "🎤 聞いています...";
+            elements.statusDiv.classList.add('recording');
             
             console.log('[録音] 開始');
             
         } catch (error) {
             console.error("録音開始エラー:", error);
-            elements.statusDiv.textContent = "⚠️ マイクへのアクセスが拒否されました";
+            elements.statusDiv.textContent = "⚠️ 録音開始に失敗しました";
         }
     },
 
     stopRecording() {
+        if (this.silenceTimeout) {
+            clearTimeout(this.silenceTimeout);
+            this.silenceTimeout = null;
+        }
+        
         if (this.mediaRecorder && appState.isRecording) {
             this.mediaRecorder.stop();
             appState.isRecording = false;
-            appState.shouldRestart = false;
-            this.updateRecordingUI(false);
+            elements.statusDiv.classList.remove('recording');
             elements.statusDiv.textContent = "🔄 処理中...";
             console.log('[録音] 停止');
         }
+    },
+
+    stopListening() {
+        this.isListening = false;
+        
+        if (this.silenceTimeout) {
+            clearTimeout(this.silenceTimeout);
+            this.silenceTimeout = null;
+        }
+        
+        if (this.stream) {
+            this.stream.getTracks().forEach(track => track.stop());
+            this.stream = null;
+        }
+        
+        if (this.audioContext) {
+            this.audioContext.close();
+            this.audioContext = null;
+        }
+        
+        elements.statusDiv.textContent = "⏹️ 音声検出停止";
+        elements.statusDiv.classList.remove('recording');
+        console.log('[VAD] 音声検出停止');
     },
 
     async sendAudioToServer(audioBlob) {
@@ -716,17 +818,30 @@ const speechModule = {
             elements.replyAudio.play();
             
             elements.replyAudio.onended = () => {
-                elements.statusDiv.textContent = "🎤 音声入力 待機中...";
+                elements.statusDiv.textContent = "🎤 話しかけてください...";
+                appState.shouldRestart = true;
+                
+                setTimeout(() => {
+                    if (appState.shouldRestart && !appState.isRecording && this.isListening) {
+                        console.log('[VAD] 次の音声を待機');
+                    }
+                }, 500);
             };
             
         } catch (error) {
             console.error("音声送信エラー:", error);
             elements.statusDiv.textContent = '⚠️ 音声処理エラーが発生しました';
+            appState.shouldRestart = true;
+            
+            setTimeout(() => {
+                if (appState.shouldRestart && this.isListening) {
+                    elements.statusDiv.textContent = "🎤 話しかけてください...";
+                }
+            }, 2000);
         }
     },
 
     async startWithMedakaGreeting() {
-        // 既存のロジックをそのまま使用
         try {
             elements.statusDiv.textContent = "🐟 メダカが話しかけています...";
             
@@ -745,27 +860,17 @@ const speechModule = {
             elements.replyAudio.onended = () => {
                 elements.statusDiv.textContent = "🎤 メダカが話しかけたよ。お返事してね！";
                 setTimeout(() => {
-                    this.startDirectRecording();
+                    this.startVoiceDetection();
                 }, 1000);
             };
             
         } catch (error) {
             console.error("メダカ挨拶エラー:", error);
-            this.startDirectRecording();
+            this.startVoiceDetection();
         }
-    },
-
-    updateRecordingUI(recording) {
-        const buttons = [elements.normalRecordBtn, elements.recordBtn];
-        buttons.forEach(btn => {
-            if (recording) {
-                btn.classList.add('recording');
-            } else {
-                btn.classList.remove('recording');
-            }
-        });
     }
 };
+
 // フルスクリーン機能
 const fullscreenModule = {
     enterFullscreen() {
@@ -774,12 +879,9 @@ const fullscreenModule = {
         document.body.style.overflow = 'hidden';
         elements.canvasFullscreenBtn.textContent = '📱 戻る';
         
-        // 現在表示されているものを拡大表示
         if (appState.showingAnalysis && appState.currentImageData) {
-            // 解析結果を表示
             this.updateFullscreenCanvas(appState.currentImageData);
         } else {
-            // カメラ映像を表示
             this.displayVideoInFullscreen();
         }
     },
@@ -790,7 +892,6 @@ const fullscreenModule = {
         document.body.style.overflow = 'auto';
         elements.canvasFullscreenBtn.textContent = '🔍 拡大';
         
-        // ビデオのフルスクリーン描画を停止
         if (this.videoRenderInterval) {
             clearInterval(this.videoRenderInterval);
             this.videoRenderInterval = null;
@@ -809,7 +910,6 @@ const fullscreenModule = {
         fullscreenCtx.imageSmoothingEnabled = true;
         fullscreenCtx.imageSmoothingQuality = 'high';
         
-        // ビデオを継続的に描画
         const renderVideo = () => {
             if (!appState.isFullscreen) return;
             
@@ -839,18 +939,16 @@ const fullscreenModule = {
             }
         };
         
-        // 30fpsでビデオを描画
         if (this.videoRenderInterval) {
             clearInterval(this.videoRenderInterval);
         }
         this.videoRenderInterval = setInterval(renderVideo, 33);
-        renderVideo(); // 即座に最初のフレームを描画
+        renderVideo();
     },
 
     updateFullscreenCanvas(resultImg) {
         if (!appState.isFullscreen) return;
         
-        // ビデオ描画を停止
         if (this.videoRenderInterval) {
             clearInterval(this.videoRenderInterval);
             this.videoRenderInterval = null;
@@ -899,7 +997,6 @@ const fullscreenModule = {
 
         elements.displayCanvas.addEventListener('click', () => {
             if (!appState.isFullscreen) {
-                // 解析結果表示中のみクリックで拡大
                 if (appState.showingAnalysis) {
                     this.enterFullscreen();
                 }
@@ -912,12 +1009,17 @@ const fullscreenModule = {
 
 // UI制御機能
 const uiModule = {
-    setupRecordingButtons() {
-        [elements.normalRecordBtn, elements.recordBtn].forEach(btn => {
-            btn.addEventListener('click', () => speechModule.startRecording());
+    setupVADButtons() {
+        elements.vadStartBtn.addEventListener('click', () => {
+            speechModule.startListening();
+            elements.vadStartBtn.disabled = true;
+            elements.vadStopBtn.disabled = false;
         });
-        [elements.normalStopBtn, elements.stopBtn].forEach(btn => {
-            btn.addEventListener('click', () => speechModule.stopRecording());
+        
+        elements.vadStopBtn.addEventListener('click', () => {
+            speechModule.stopListening();
+            elements.vadStartBtn.disabled = false;
+            elements.vadStopBtn.disabled = true;
         });
     },
     
@@ -928,8 +1030,12 @@ const uiModule = {
             setTimeout(() => {
                 appState.shouldRestart = true;
                 elements.startButton.classList.add('hidden');
-                elements.normalControls.classList.remove('hidden');
-                elements.statusDiv.textContent = "🎤 録音ボタンを押して話しかけてください";
+                elements.vadControls.classList.remove('hidden');
+                elements.statusDiv.textContent = "🎤 「音声検出開始」ボタンを押してください";
+                
+                // 初期状態の設定
+                elements.vadStartBtn.disabled = false;
+                elements.vadStopBtn.disabled = true;
             }, 500);
         });
     },
@@ -939,12 +1045,10 @@ const uiModule = {
             appState.showingAnalysis = !appState.showingAnalysis;
             
             if (appState.showingAnalysis) {
-                // 解析結果を表示
                 elements.video.classList.add('hidden');
                 elements.displayCanvas.classList.remove('hidden');
                 elements.switchViewBtn.textContent = '📹 カメラ';
             } else {
-                // カメラ映像を表示
                 elements.video.classList.remove('hidden');
                 elements.displayCanvas.classList.add('hidden');
                 elements.switchViewBtn.textContent = '📊 解析結果';
@@ -956,13 +1060,13 @@ const uiModule = {
 // アプリケーション初期化・メイン処理
 const app = {
     async init() {
-        elements.normalControls.classList.add('hidden');
+        elements.vadControls.classList.add('hidden');
         
         await cameraModule.startCamera();
         websocketModule.init();
         speechModule.init();
         fullscreenModule.setupEventListeners();
-        uiModule.setupRecordingButtons();
+        uiModule.setupVADButtons();
         uiModule.setupStartButton();
         uiModule.setupSwitchButton();
         
@@ -970,7 +1074,7 @@ const app = {
         
         this.optimizeTouchEvents();
         
-        console.log('🐠 魚認識アプリが初期化されました');
+        console.log('🐠 魚認識アプリが初期化されました (VAD搭載)');
     },
 
     optimizeTouchEvents() {
@@ -982,4 +1086,4 @@ const app = {
 app.init();
   </script>
 </body>
-</html>x
+</html>
