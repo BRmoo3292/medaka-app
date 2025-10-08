@@ -613,10 +613,10 @@ const speechModule = {
     vadPaused: false,  // 🆕 VAD一時停止フラグ
     
     // VAD設定
-    SILENCE_THRESHOLD: 0.01,
-    SILENCE_DURATION: 1500,
-    VOICE_THRESHOLD: 0.02,
-    MIN_RECORDING_TIME: 500,
+    SILENCE_THRESHOLD: 0.08,      // 無音判定の閾値（0.015 → 0.08）
+    SILENCE_DURATION: 1500,       // 無音が続いたら停止（ミリ秒）
+    VOICE_THRESHOLD: 0.10,        // 音声検出の閾値（0.035 → 0.10）
+    MIN_RECORDING_TIME: 500,      // 最低録音時間（ミリ秒）
     recordingStartTime: null,
 
     init() {
