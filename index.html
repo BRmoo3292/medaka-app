@@ -387,7 +387,7 @@ const browserDetectionModule = {
                 graphOptimizationLevel: 'all',
                 enableCpuMemArena: false,
                 enableMemPattern: false,
-                logSeverityLevel: 0
+                logSeverityLevel: 3
             };
             
             // ✅ まずfetchでモデルをダウンロード
@@ -813,36 +813,51 @@ const imageModule = {
         appState.isSending = true;
         
         try {
-            // ✅ ブラウザで検出実行のみ（サーバー送信を削除）
+            // ✅ モデルが読み込まれていない場合はスキップ
             if (!browserDetectionModule.modelLoaded) {
                 console.log('[検出] モデル未読み込み - スキップ');
                 appState.isSending = false;
                 return;
             }
 
+            // ✅ ブラウザで検出実行
             const detections = await browserDetectionModule.detectObjects(elements.video);
             
-            // 検出結果を描画
+            // ✅ 常にdisplayCanvasを更新
             elements.displayCanvas.width = elements.video.videoWidth;
             elements.displayCanvas.height = elements.video.videoHeight;
             
             const ctx = elements.displayCanvas.getContext('2d');
+            
+            // 最新のビデオフレームを描画
             ctx.drawImage(elements.video, 0, 0);
             
             // 検出結果を描画
-            browserDetectionModule.drawDetections(elements.displayCanvas, detections);
-            
-            // 🐟 元気度を計算・更新
             if (detections.length > 0) {
+                browserDetectionModule.drawDetections(elements.displayCanvas, detections);
+                
+                // 🐟 元気度を計算・更新
                 const vitality = medakaVitalityModule.update(detections);
                 
                 // 画面に元気度を表示
                 this.drawVitalityInfo(ctx, vitality);
                 
                 // サーバーに元気度を送信（会話機能で使用）
-                if (vitality.dataPoints >= 30) { // 2秒分のデータが溜まったら送信
+                if (vitality.dataPoints >= 30) {
                     await medakaVitalityModule.sendVitalityToServer(vitality);
                 }
+            } else {
+                // 検出がない場合も元気度表示エリアをクリア/表示
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(10, 10, 200, 80);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '16px Arial';
+                ctx.fillText('メダカを探しています...', 20, 50);
+            }
+            
+            // ✅ フルスクリーン表示中も更新
+            if (appState.isFullscreen && appState.showingAnalysis) {
+                this.updateFullscreenWithCanvas();
             }
             
         } catch (error) {
@@ -873,6 +888,42 @@ const imageModule = {
         ctx.font = '16px Arial';
         ctx.fillText(`状態: ${vitality.statusJa}`, padding + 10, padding + 55);
         ctx.fillText(`速度: ${vitality.avgSpeed} px/s`, padding + 10, padding + 75);
+    },
+    
+    /**
+     * フルスクリーン表示時にCanvasを更新
+     */
+    updateFullscreenWithCanvas() {
+        if (!appState.isFullscreen) return;
+        
+        const screenWidth = window.innerWidth;
+        const screenHeight = window.innerHeight;
+        
+        elements.fullscreenCanvas.width = screenWidth;
+        elements.fullscreenCanvas.height = screenHeight;
+        
+        fullscreenCtx.imageSmoothingEnabled = true;
+        fullscreenCtx.imageSmoothingQuality = 'high';
+        
+        const canvasAspectRatio = elements.displayCanvas.width / elements.displayCanvas.height;
+        const screenAspectRatio = screenWidth / screenHeight;
+        
+        let drawWidth, drawHeight, drawX, drawY;
+        
+        if (canvasAspectRatio > screenAspectRatio) {
+            drawWidth = screenWidth;
+            drawHeight = screenWidth / canvasAspectRatio;
+            drawX = 0;
+            drawY = (screenHeight - drawHeight) / 2;
+        } else {
+            drawWidth = screenHeight * canvasAspectRatio;
+            drawHeight = screenHeight;
+            drawX = (screenWidth - drawWidth) / 2;
+            drawY = 0;
+        }
+        
+        fullscreenCtx.clearRect(0, 0, screenWidth, screenHeight);
+        fullscreenCtx.drawImage(elements.displayCanvas, drawX, drawY, drawWidth, drawHeight);
     }
 };
 
