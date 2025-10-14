@@ -327,7 +327,11 @@
   <audio id="replyAudio" autoplay></audio>
   
   <script>
+// モデルが読み込まれているか確認
+console.log(browserDetectionModule.modelLoaded);
 
+// 出力形状を確認
+// postprocess内のconsole.logで表示される
 // 設定・定数
 const CONFIG = {
     SERVER_URL: window.location.origin,
