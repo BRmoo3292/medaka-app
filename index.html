@@ -289,6 +289,8 @@
       }
     }
   </style>
+  <!-- ONNX Runtime Web -->
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 </head>
 <body>
   <div class="container">
@@ -325,10 +327,13 @@
   <audio id="replyAudio" autoplay></audio>
   
   <script>
+
+// 出力形状を確認
+// postprocess内のconsole.logで表示される
 // 設定・定数
 const CONFIG = {
     SERVER_URL: window.location.origin,
-    FRAME_RATE: 33,
+    FRAME_RATE: 15,
     PROFILE_ID: 1
 };
 
@@ -363,7 +368,224 @@ const appState = {
     wsConnected: false,
     showingAnalysis: false
 };
+// ブラウザ物体検出モジュール
+const browserDetectionModule = {
+    session: null,
+    modelLoaded: false,
+    inputSize: 640,
 
+    async loadModel() {
+        try {
+            console.log('[ブラウザ検出] モデル読み込み開始...');
+            
+            const modelUrl = `${window.location.origin}/best.onnx`;
+            console.log('[モデルURL]', modelUrl);
+            
+            // ✅ fetchオプションを明示的に設定
+            const sessionOptions = {
+                executionProviders: ['wasm'],  // webglではなくwasmを使用
+                graphOptimizationLevel: 'all',
+                enableCpuMemArena: false,
+                enableMemPattern: false,
+                logSeverityLevel: 3
+            };
+            
+            // ✅ まずfetchでモデルをダウンロード
+            console.log('[モデル] ダウンロード開始...');
+            const response = await fetch(modelUrl, {
+                method: 'GET',
+                mode: 'cors',
+                cache: 'default',
+                credentials: 'omit'
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const arrayBuffer = await response.arrayBuffer();
+            console.log(`[モデル] ダウンロード完了: ${arrayBuffer.byteLength} bytes`);
+            
+            // ✅ ArrayBufferから直接モデルを作成
+            this.session = await ort.InferenceSession.create(arrayBuffer, sessionOptions);
+            
+            this.modelLoaded = true;
+            console.log('✅ [ブラウザ検出] モデル読み込み完了');
+            elements.statusDiv.textContent = "✅ 検出モデル準備完了";
+        } catch (error) {
+            console.error('❌ [ブラウザ検出] モデル読み込み失敗:', error);
+            console.error('エラー詳細:', error.message);
+            console.error('スタック:', error.stack);
+            elements.statusDiv.textContent = "⚠️ モデル読み込み失敗";
+        }
+    },
+
+    async detectObjects(videoElement) {
+        if (!this.modelLoaded) {
+            console.warn('[ブラウザ検出] モデルが未読み込み');
+            return [];
+        }
+
+        try {
+            // 画像を前処理
+            const inputTensor = await this.preprocessImage(videoElement);
+            
+            // 推論実行
+            const startTime = performance.now();
+            const results = await this.session.run({ images: inputTensor });
+            const inferenceTime = performance.now() - startTime;
+            
+            console.log(`[ブラウザ検出] 推論時間: ${inferenceTime.toFixed(1)}ms`);
+            
+            // 結果を後処理
+            const detections = this.postprocess(results);
+            
+            return detections;
+            
+        } catch (error) {
+            console.error('[ブラウザ検出] 検出エラー:', error);
+            return [];
+        }
+    },
+
+    async preprocessImage(videoElement) {
+        // Canvasで画像を取得
+        const canvas = document.createElement('canvas');
+        canvas.width = this.inputSize;
+        canvas.height = this.inputSize;
+        const ctx = canvas.getContext('2d');
+        
+        // リサイズして描画
+        ctx.drawImage(videoElement, 0, 0, this.inputSize, this.inputSize);
+        
+        // ImageDataを取得
+        const imageData = ctx.getImageData(0, 0, this.inputSize, this.inputSize);
+        const pixels = imageData.data;
+        
+        // Float32Array形式に変換 [1, 3, 640, 640]
+        const red = new Float32Array(this.inputSize * this.inputSize);
+        const green = new Float32Array(this.inputSize * this.inputSize);
+        const blue = new Float32Array(this.inputSize * this.inputSize);
+        
+        for (let i = 0; i < pixels.length; i += 4) {
+            const idx = i / 4;
+            red[idx] = pixels[i] / 255.0;     // R
+            green[idx] = pixels[i + 1] / 255.0; // G
+            blue[idx] = pixels[i + 2] / 255.0;  // B
+        }
+        
+        // チャネルを結合
+        const input = new Float32Array(3 * this.inputSize * this.inputSize);
+        input.set(red, 0);
+        input.set(green, this.inputSize * this.inputSize);
+        input.set(blue, 2 * this.inputSize * this.inputSize);
+        
+        // Tensorに変換
+        return new ort.Tensor('float32', input, [1, 3, this.inputSize, this.inputSize]);
+    },
+
+    postprocess(results) {
+    // YOLOv8の出力: [1, 84, 8400]
+    // 84 = 4(bbox) + 80(クラス数)
+    const output = results.output0;
+    const outputData = output.data;
+    const [batchSize, numAttributes, numBoxes] = output.dims;
+    
+    console.log(`[後処理] 出力形状: [${output.dims.join(', ')}]`);
+    
+    const detections = [];
+    const confThreshold = 0.5;
+    const iouThreshold = 0.45;
+    
+    // 8400個のボックスをループ
+    for (let i = 0; i < numBoxes; i++) {
+        // YOLOv8形式: [cx, cy, w, h, class_scores...]
+        const cx = outputData[i];  // 中心X
+        const cy = outputData[numBoxes + i];  // 中心Y
+        const w = outputData[2 * numBoxes + i];  // 幅
+        const h = outputData[3 * numBoxes + i];  // 高さ
+        
+        // クラススコア（メダカは1クラスなので4番目の要素）
+        const classScore = outputData[4 * numBoxes + i];
+        
+        if (classScore > confThreshold) {
+            // 中心座標を左上座標に変換
+            const x = (cx - w / 2) * elements.video.videoWidth / this.inputSize;
+            const y = (cy - h / 2) * elements.video.videoHeight / this.inputSize;
+            const width = w * elements.video.videoWidth / this.inputSize;
+            const height = h * elements.video.videoHeight / this.inputSize;
+            
+            detections.push({
+                x: x,
+                y: y,
+                width: width,
+                height: height,
+                confidence: classScore,
+                class: 0
+            });
+        }
+    }
+    
+    // NMS（Non-Maximum Suppression）を適用
+    const filteredDetections = this.applyNMS(detections, iouThreshold);
+    
+    console.log(`[後処理] 検出数: ${filteredDetections.length}`);
+    return filteredDetections;
+},applyNMS(boxes, iouThreshold) {
+    // 信頼度でソート
+    boxes.sort((a, b) => b.confidence - a.confidence);
+    
+    const selected = [];
+    const suppressed = new Set();
+    
+    for (let i = 0; i < boxes.length; i++) {
+        if (suppressed.has(i)) continue;
+        
+        selected.push(boxes[i]);
+        
+        for (let j = i + 1; j < boxes.length; j++) {
+            if (suppressed.has(j)) continue;
+            
+            const iou = this.calculateIoU(boxes[i], boxes[j]);
+            if (iou > iouThreshold) {
+                suppressed.add(j);
+            }
+        }
+    }
+    
+    return selected;
+},// IoU（Intersection over Union）計算
+calculateIoU(box1, box2) {
+    const x1 = Math.max(box1.x, box2.x);
+    const y1 = Math.max(box1.y, box2.y);
+    const x2 = Math.min(box1.x + box1.width, box2.x + box2.width);
+    const y2 = Math.min(box1.y + box1.height, box2.y + box2.height);
+    
+    const intersectionArea = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+    const box1Area = box1.width * box1.height;
+    const box2Area = box2.width * box2.height;
+    const unionArea = box1Area + box2Area - intersectionArea;
+    
+    return intersectionArea / unionArea;
+},
+
+    drawDetections(canvas, detections) {
+        const ctx = canvas.getContext('2d');
+        
+        detections.forEach(det => {
+            // バウンディングボックス描画
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(det.x, det.y, det.width, det.height);
+            
+            // ラベル描画
+            ctx.fillStyle = '#00ff00';
+            ctx.font = '16px Arial';
+            ctx.fillText(`メダカ ${(det.confidence * 100).toFixed(0)}%`, 
+                        det.x, det.y - 5);
+        });
+    }
+};
 // カメラ機能
 const cameraModule = {
     async startCamera() {
@@ -383,89 +605,206 @@ const cameraModule = {
     }
 };
 
-// WebSocket接続機能
-const websocketModule = {
-    init() {
-        this.connect();
+const medakaVitalityModule = {
+    // 追跡データ
+    trackHistory: new Map(), // メダカID -> 位置履歴
+    speedHistory: [],        // 速度履歴（直近75フレーム分）
+    maxHistoryLength: 75,    // 5秒分の履歴 (15 FPS想定)
+    fps: 15,                 // 実効FPS
+    
+    // 元気度判定の閾値（ピクセル/秒）
+    thresholds: {
+        veryActive: 50,   // 50px/秒以上 → 元気
+        active: 20,       // 20-50px/秒 → 普通
+        slow: 5,          // 5-20px/秒 → やや元気がない
+        lethargic: 0      // 5px/秒未満 → ほとんど動かない
     },
-
-    connect() {
-        const wsUrl = CONFIG.SERVER_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
-        appState.ws = new WebSocket(wsUrl);
+    
+    // 前フレームのタイムスタンプ
+    lastFrameTime: null,
+    
+    /**
+     * 検出結果から速度を計算して元気度を更新
+     */
+    update(detections) {
+        const currentTime = performance.now();
         
-        appState.ws.onopen = () => {
-            appState.wsConnected = true;
-            console.log('WebSocket接続完了');
-        };
-        
-        appState.ws.onmessage = (event) => {
-            this.handleMessage(event);
-        };
-        
-        appState.ws.onclose = () => {
-            appState.wsConnected = false;
-            console.log('WebSocket接続が切断されました。再接続を試行します...');
-            setTimeout(() => this.connect(), 1000);
-        };
-
-        appState.ws.onerror = (error) => {
-            console.error('WebSocket エラー:', error);
-        };
-    },
-
-    handleMessage(event) {
-        const resultImg = new Image();
-        const imageUrl = URL.createObjectURL(event.data);
-        
-        resultImg.onload = () => {
-            appState.currentImageData = resultImg;
-            
-            elements.displayCanvas.width = resultImg.naturalWidth;
-            elements.displayCanvas.height = resultImg.naturalHeight;
-            displayCtx.drawImage(resultImg, 0, 0);
-            
-            if (appState.isFullscreen) {
-                this.updateFullscreenCanvas(resultImg);
-            }
-            
-            URL.revokeObjectURL(imageUrl);
-            appState.isSending = false;
-        };
-        
-        resultImg.src = imageUrl;
-    },
-
-    updateFullscreenCanvas(resultImg) {
-        if (!appState.isFullscreen) return;
-        
-        elements.fullscreenCanvas.width = resultImg.naturalWidth;
-        elements.fullscreenCanvas.height = resultImg.naturalHeight;
-        fullscreenCtx.clearRect(0, 0, resultImg.naturalWidth, resultImg.naturalHeight);
-        fullscreenCtx.drawImage(resultImg, 0, 0);
-    },
-
-    sendFrame() {
-        if (!appState.ws || appState.ws.readyState !== WebSocket.OPEN) {
-            return false;
+        // FPS計算
+        if (this.lastFrameTime) {
+            const deltaTime = (currentTime - this.lastFrameTime) / 1000; // 秒単位
+            this.fps = 1 / deltaTime;
         }
-
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
+        this.lastFrameTime = currentTime;
         
-        canvas.width = elements.video.videoWidth;
-        canvas.height = elements.video.videoHeight;
-        ctx.drawImage(elements.video, 0, 0);
-        
-        canvas.toBlob(blob => {
-            if (appState.ws && appState.ws.readyState === WebSocket.OPEN) {
-                appState.ws.send(blob);
+        // 各メダカの速度を計算
+        detections.forEach((det, index) => {
+            const medakaId = index; // 簡易的にインデックスをIDとして使用
+            const currentPos = { x: det.x + det.width / 2, y: det.y + det.height / 2 };
+            
+            // 速度計算
+            const speed = this.calculateSpeed(medakaId, currentPos);
+            
+            if (speed !== null) {
+                this.speedHistory.push(speed);
+                
+                // 履歴の長さを制限
+                if (this.speedHistory.length > this.maxHistoryLength) {
+                    this.speedHistory.shift();
+                }
             }
-        }, 'image/jpeg', 0.8);
-
-        return true;
+            
+            // 位置を履歴に追加
+            if (!this.trackHistory.has(medakaId)) {
+                this.trackHistory.set(medakaId, []);
+            }
+            const history = this.trackHistory.get(medakaId);
+            history.push({ pos: currentPos, time: currentTime });
+            
+            // 履歴を制限（直近10フレーム）
+            if (history.length > 10) {
+                history.shift();
+            }
+        });
+        
+        // 元気度を計算
+        const vitality = this.calculateVitality();
+        
+        // デバッグ情報を表示
+        this.logVitalityInfo(vitality, detections.length);
+        
+        return vitality;
+    },
+    
+    /**
+     * メダカの速度を計算（ピクセル/秒）
+     */
+    calculateSpeed(medakaId, currentPos) {
+        const history = this.trackHistory.get(medakaId);
+        
+        if (!history || history.length < 2) {
+            return null; // 履歴が不足
+        }
+        
+        const prevData = history[history.length - 1];
+        const prevPos = prevData.pos;
+        const prevTime = prevData.time;
+        
+        // 距離を計算（ピクセル）
+        const distance = Math.sqrt(
+            Math.pow(currentPos.x - prevPos.x, 2) + 
+            Math.pow(currentPos.y - prevPos.y, 2)
+        );
+        
+        // 時間差（秒）
+        const deltaTime = (performance.now() - prevTime) / 1000;
+        
+        if (deltaTime === 0) return null;
+        
+        // 速度（ピクセル/秒）
+        const speed = distance / deltaTime;
+        
+        return speed;
+    },
+    
+    /**
+     * 直近の速度履歴から元気度を計算
+     */
+    calculateVitality() {
+        if (this.speedHistory.length === 0) {
+            return {
+                status: "Unknown",
+                statusJa: "不明",
+                avgSpeed: 0,
+                score: 0,
+                color: "#999999"
+            };
+        }
+        
+        // 平均速度を計算
+        const avgSpeed = this.speedHistory.reduce((sum, s) => sum + s, 0) / this.speedHistory.length;
+        
+        // 元気度を判定
+        let status, statusJa, score, color;
+        
+        if (avgSpeed >= this.thresholds.veryActive) {
+            status = "Active";
+            statusJa = "元気";
+            score = 100;
+            color = "#00ff00"; // 緑
+        } else if (avgSpeed >= this.thresholds.active) {
+            status = "Normal";
+            statusJa = "普通";
+            score = 70;
+            color = "#ffff00"; // 黄色
+        } else if (avgSpeed >= this.thresholds.slow) {
+            status = "Slow";
+            statusJa = "やや元気がない";
+            score = 40;
+            color = "#ff9900"; // オレンジ
+        } else {
+            status = "Lethargic";
+            statusJa = "ほとんど動かない";
+            score = 10;
+            color = "#ff0000"; // 赤
+        }
+        
+        return {
+            status,
+            statusJa,
+            avgSpeed: avgSpeed.toFixed(2),
+            score,
+            color,
+            dataPoints: this.speedHistory.length
+        };
+    },
+    
+    /**
+     * デバッグ情報をコンソールに出力
+     */
+    logVitalityInfo(vitality, detectionCount) {
+        if (this.speedHistory.length > 0 && this.speedHistory.length % 15 === 0) {
+            console.log("\n" + "=".repeat(50));
+            console.log("🐟 メダカ元気度分析");
+            console.log("=".repeat(50));
+            console.log(`検出数: ${detectionCount} 匹`);
+            console.log(`平均速度: ${vitality.avgSpeed} px/秒`);
+            console.log(`元気度: ${vitality.statusJa} (${vitality.score}/100)`);
+            console.log(`データポイント: ${vitality.dataPoints}/${this.maxHistoryLength}`);
+            console.log(`実効FPS: ${this.fps.toFixed(1)}`);
+            console.log("=".repeat(50) + "\n");
+        }
+    },
+    
+    /**
+     * 元気度をサーバーに送信（既存のAPIとの連携用）
+     */
+    async sendVitalityToServer(vitality) {
+        try {
+            // サーバー側のlatest_healthを更新
+            await fetch(`${CONFIG.SERVER_URL}/update_health`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    status: vitality.status,
+                    avg_speed: parseFloat(vitality.avgSpeed),
+                    score: vitality.score
+                })
+            });
+        } catch (error) {
+            console.error("元気度送信エラー:", error);
+        }
+    },
+    
+    /**
+     * リセット（新しいセッション開始時など）
+     */
+    reset() {
+        this.trackHistory.clear();
+        this.speedHistory = [];
+        this.lastFrameTime = null;
+        console.log("[元気度] 追跡データをリセットしました");
     }
 };
-
 // 画像処理・送信機能
 const imageModule = {
     async sendFrame() {
@@ -474,87 +813,87 @@ const imageModule = {
         appState.isSending = true;
         
         try {
-            if (appState.wsConnected) {
-                const success = websocketModule.sendFrame();
-                if (success) return;
-            }
-            
-            await this.sendFrameHTTP();
-        } catch (error) {
-            console.error("画像送信エラー:", error);
-        } finally {
-            if (!appState.wsConnected) {
+            // ✅ モデルが読み込まれていない場合はスキップ
+            if (!browserDetectionModule.modelLoaded) {
+                console.log('[検出] モデル未読み込み - スキップ');
                 appState.isSending = false;
+                return;
             }
-        }
-    },
 
-    async sendFrameHTTP() {
-        const processedBlob = await this.captureAndProcessVideo();
-        const resultBlob = await this.sendToServer(processedBlob);
-        await this.displayResult(resultBlob);
-    },
-
-    async captureAndProcessVideo() {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
-        canvas.width = elements.video.videoWidth;
-        canvas.height = elements.video.videoHeight;
-        ctx.drawImage(elements.video, 0, 0);
-        
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
-        return blob;
-    },
-
-    async sendToServer(blob) {
-        const formData = new FormData();
-        formData.append('file', blob, 'capture.jpg');
-        
-        try {
-            const response = await fetch(`${CONFIG.SERVER_URL}/predict`, {
-                method: 'POST',
-                body: formData,
-            });
+            // ✅ ブラウザで検出実行
+            const detections = await browserDetectionModule.detectObjects(elements.video);
             
-            if (!response.ok) throw new Error('サーバーエラー');
+            // ✅ 常にdisplayCanvasを更新
+            elements.displayCanvas.width = elements.video.videoWidth;
+            elements.displayCanvas.height = elements.video.videoHeight;
             
-            return await response.blob();
+            const ctx = elements.displayCanvas.getContext('2d');
+            
+            // 最新のビデオフレームを描画
+            ctx.drawImage(elements.video, 0, 0);
+            
+            // 検出結果を描画
+            if (detections.length > 0) {
+                browserDetectionModule.drawDetections(elements.displayCanvas, detections);
+                
+                // 🐟 元気度を計算・更新
+                const vitality = medakaVitalityModule.update(detections);
+                
+                // 画面に元気度を表示
+                this.drawVitalityInfo(ctx, vitality);
+                
+                // サーバーに元気度を送信（会話機能で使用）
+                if (vitality.dataPoints >= 30) {
+                    await medakaVitalityModule.sendVitalityToServer(vitality);
+                }
+            } else {
+                // 検出がない場合も元気度表示エリアをクリア/表示
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(10, 10, 200, 80);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '16px Arial';
+                ctx.fillText('メダカを探しています...', 20, 50);
+            }
+            
+            // ✅ フルスクリーン表示中も更新
+            if (appState.isFullscreen && appState.showingAnalysis) {
+                this.updateFullscreenWithCanvas();
+            }
+            
         } catch (error) {
-            console.error('サーバー通信エラー:', error);
-            throw error;
+            console.error("検出エラー:", error);
+        } finally {
+            appState.isSending = false;
         }
     },
-
-    async displayResult(resultBlob) {
-        const resultImg = new Image();
-        const imageUrl = URL.createObjectURL(resultBlob);
+    
+    /**
+     * Canvas上に元気度情報を描画
+     */
+    drawVitalityInfo(ctx, vitality) {
+        const padding = 10;
+        const boxWidth = 200;
+        const boxHeight = 80;
         
-        return new Promise((resolve) => {
-            resultImg.onload = () => {
-                appState.currentImageData = resultImg;
-                this.updateCanvases(resultImg);
-                URL.revokeObjectURL(imageUrl);
-                resolve();
-            };
-            resultImg.src = imageUrl;
-        });
+        // 半透明の背景
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(padding, padding, boxWidth, boxHeight);
+        
+        // 元気度テキスト
+        ctx.fillStyle = vitality.color;
+        ctx.font = 'bold 20px Arial';
+        ctx.fillText(`元気度: ${vitality.score}`, padding + 10, padding + 30);
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '16px Arial';
+        ctx.fillText(`状態: ${vitality.statusJa}`, padding + 10, padding + 55);
+        ctx.fillText(`速度: ${vitality.avgSpeed} px/s`, padding + 10, padding + 75);
     },
-
-    updateCanvases(resultImg) {
-        elements.displayCanvas.width = resultImg.naturalWidth;
-        elements.displayCanvas.height = resultImg.naturalHeight;
-        
-        displayCtx.imageSmoothingEnabled = true;
-        displayCtx.imageSmoothingQuality = 'high';
-        displayCtx.drawImage(resultImg, 0, 0);
-        
-        if (appState.isFullscreen) {
-            this.updateFullscreenCanvas(resultImg);
-        }
-    },
-
-    updateFullscreenCanvas(resultImg) {
+    
+    /**
+     * フルスクリーン表示時にCanvasを更新
+     */
+    updateFullscreenWithCanvas() {
         if (!appState.isFullscreen) return;
         
         const screenWidth = window.innerWidth;
@@ -562,44 +901,31 @@ const imageModule = {
         
         elements.fullscreenCanvas.width = screenWidth;
         elements.fullscreenCanvas.height = screenHeight;
-        elements.fullscreenCanvas.style.width = `${screenWidth}px`;
-        elements.fullscreenCanvas.style.height = `${screenHeight}px`;
         
         fullscreenCtx.imageSmoothingEnabled = true;
         fullscreenCtx.imageSmoothingQuality = 'high';
         
-        const imageAspectRatio = resultImg.naturalWidth / resultImg.naturalHeight;
+        const canvasAspectRatio = elements.displayCanvas.width / elements.displayCanvas.height;
         const screenAspectRatio = screenWidth / screenHeight;
         
         let drawWidth, drawHeight, drawX, drawY;
         
-        if (imageAspectRatio > screenAspectRatio) {
+        if (canvasAspectRatio > screenAspectRatio) {
             drawWidth = screenWidth;
-            drawHeight = screenWidth / imageAspectRatio;
+            drawHeight = screenWidth / canvasAspectRatio;
             drawX = 0;
             drawY = (screenHeight - drawHeight) / 2;
         } else {
-            drawWidth = screenHeight * imageAspectRatio;
+            drawWidth = screenHeight * canvasAspectRatio;
             drawHeight = screenHeight;
             drawX = (screenWidth - drawWidth) / 2;
             drawY = 0;
         }
         
         fullscreenCtx.clearRect(0, 0, screenWidth, screenHeight);
-        fullscreenCtx.drawImage(resultImg, drawX, drawY, drawWidth, drawHeight);
-    },
-
-    handleResize() {
-        if (appState.currentImageData && appState.isFullscreen) {
-            this.updateFullscreenCanvas(appState.currentImageData);
-        }
+        fullscreenCtx.drawImage(elements.displayCanvas, drawX, drawY, drawWidth, drawHeight);
     }
 };
-
-window.addEventListener('resize', () => imageModule.handleResize());
-window.addEventListener('orientationchange', () => {
-    setTimeout(() => imageModule.handleResize(), 500);
-});
 
 // VAD音声認識機能
 const speechModule = {
@@ -1107,8 +1433,10 @@ const app = {
     async init() {
         elements.vadControls.classList.add('hidden');
         
+        // ✅ ブラウザ検出モデルを読み込み
+        await browserDetectionModule.loadModel();
+        
         await cameraModule.startCamera();
-        websocketModule.init();
         speechModule.init();
         fullscreenModule.setupEventListeners();
         uiModule.setupVADButtons();
@@ -1119,7 +1447,7 @@ const app = {
         
         this.optimizeTouchEvents();
         
-        console.log('🐠 魚認識アプリが初期化されました (VAD搭載)');
+        console.log('🐠 魚認識アプリが初期化されました (ブラウザ検出)');
     },
 
     optimizeTouchEvents() {
@@ -1127,7 +1455,6 @@ const app = {
         document.addEventListener('touchmove', function(){}, {passive: true});
     }
 };
-
 app.init();
   </script>
 </body>
