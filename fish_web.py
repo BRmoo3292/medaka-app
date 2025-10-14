@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse,Response
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
@@ -26,6 +26,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]  
 )
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -114,6 +115,43 @@ def connect_to_database(db_url, max_retries=3):
             break
     
     return None
+
+@app.get("/best.onnx")
+async def serve_onnx_model():
+    """ブラウザ検出用のONNXモデルを配信"""
+    model_path = "best.onnx"
+    if not os.path.exists(model_path):
+        raise HTTPException(404, f"Model file not found: {model_path}")
+    
+    # ファイルを読み込み
+    with open(model_path, "rb") as f:
+        content = f.read()
+    
+    # Responseで直接返す（CORSヘッダー完全制御）
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Expose-Headers": "*",
+            "Cache-Control": "public, max-age=31536000",
+            "Content-Type": "application/octet-stream",
+            "Content-Length": str(len(content))
+        }
+    )
+
+@app.options("/best.onnx")
+async def options_onnx_model():
+    return Response(
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
 
 @app.post("/transcribe_audio")
 async def transcribe_audio(file: UploadFile):
