@@ -375,22 +375,26 @@ const browserDetectionModule = {
     inputSize: 640, // YOLOv8の入力サイズ
 
     async loadModel() {
-        try {
-            console.log('[ブラウザ検出] モデル読み込み開始...');
-            
-            // ONNX Runtimeセッション作成
-            this.session = await ort.InferenceSession.create('best.onnx', {
-                executionProviders: ['webgl', 'wasm'], // WebGL優先、フォールバックでWASM
-            });
-            
-            this.modelLoaded = true;
-            console.log('✅ [ブラウザ検出] モデル読み込み完了');
-            elements.statusDiv.textContent = "✅ 検出モデル準備完了";
-        } catch (error) {
-            console.error('❌ [ブラウザ検出] モデル読み込み失敗:', error);
-            elements.statusDiv.textContent = "⚠️ モデル読み込み失敗";
-        }
-    },
+    try {
+        console.log('[ブラウザ検出] モデル読み込み開始...');
+        
+        // ✅ 絶対パスに修正
+        const modelUrl = `${window.location.origin}/best.onnx`;
+        console.log('[モデルURL]', modelUrl);
+        
+        this.session = await ort.InferenceSession.create(modelUrl, {
+            executionProviders: ['webgl', 'wasm'],
+        });
+        
+        this.modelLoaded = true;
+        console.log('✅ [ブラウザ検出] モデル読み込み完了');
+        elements.statusDiv.textContent = "✅ 検出モデル準備完了";
+    } catch (error) {
+        console.error('❌ [ブラウザ検出] モデル読み込み失敗:', error);
+        console.error('エラー詳細:', error.message);
+        elements.statusDiv.textContent = "⚠️ モデル読み込み失敗";
+    }
+},
 
     async detectObjects(videoElement) {
         if (!this.modelLoaded) {
