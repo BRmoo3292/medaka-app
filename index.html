@@ -520,88 +520,6 @@ const cameraModule = {
     }
 };
 
-// WebSocket接続機能
-const websocketModule = {
-    init() {
-        this.connect();
-    },
-
-    connect() {
-        const wsUrl = CONFIG.SERVER_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
-        appState.ws = new WebSocket(wsUrl);
-        
-        appState.ws.onopen = () => {
-            appState.wsConnected = true;
-            console.log('WebSocket接続完了');
-        };
-        
-        appState.ws.onmessage = (event) => {
-            this.handleMessage(event);
-        };
-        
-        appState.ws.onclose = () => {
-            appState.wsConnected = false;
-            console.log('WebSocket接続が切断されました。再接続を試行します...');
-            setTimeout(() => this.connect(), 1000);
-        };
-
-        appState.ws.onerror = (error) => {
-            console.error('WebSocket エラー:', error);
-        };
-    },
-
-    handleMessage(event) {
-        const resultImg = new Image();
-        const imageUrl = URL.createObjectURL(event.data);
-        
-        resultImg.onload = () => {
-            appState.currentImageData = resultImg;
-            
-            elements.displayCanvas.width = resultImg.naturalWidth;
-            elements.displayCanvas.height = resultImg.naturalHeight;
-            displayCtx.drawImage(resultImg, 0, 0);
-            
-            if (appState.isFullscreen) {
-                this.updateFullscreenCanvas(resultImg);
-            }
-            
-            URL.revokeObjectURL(imageUrl);
-            appState.isSending = false;
-        };
-        
-        resultImg.src = imageUrl;
-    },
-
-    updateFullscreenCanvas(resultImg) {
-        if (!appState.isFullscreen) return;
-        
-        elements.fullscreenCanvas.width = resultImg.naturalWidth;
-        elements.fullscreenCanvas.height = resultImg.naturalHeight;
-        fullscreenCtx.clearRect(0, 0, resultImg.naturalWidth, resultImg.naturalHeight);
-        fullscreenCtx.drawImage(resultImg, 0, 0);
-    },
-
-    sendFrame() {
-        if (!appState.ws || appState.ws.readyState !== WebSocket.OPEN) {
-            return false;
-        }
-
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
-        canvas.width = elements.video.videoWidth;
-        canvas.height = elements.video.videoHeight;
-        ctx.drawImage(elements.video, 0, 0);
-        
-        canvas.toBlob(blob => {
-            if (appState.ws && appState.ws.readyState === WebSocket.OPEN) {
-                appState.ws.send(blob);
-            }
-        }, 'image/jpeg', 0.8);
-
-        return true;
-    }
-};
 const medakaVitalityModule = {
     // 追跡データ
     trackHistory: new Map(), // メダカID -> 位置履歴
@@ -810,7 +728,13 @@ const imageModule = {
         appState.isSending = true;
         
         try {
-            // ブラウザで検出実行
+            // ✅ ブラウザで検出実行のみ（サーバー送信を削除）
+            if (!browserDetectionModule.modelLoaded) {
+                console.log('[検出] モデル未読み込み - スキップ');
+                appState.isSending = false;
+                return;
+            }
+
             const detections = await browserDetectionModule.detectObjects(elements.video);
             
             // 検出結果を描画
@@ -865,12 +789,7 @@ const imageModule = {
         ctx.fillText(`状態: ${vitality.statusJa}`, padding + 10, padding + 55);
         ctx.fillText(`速度: ${vitality.avgSpeed} px/s`, padding + 10, padding + 75);
     }
-
 };
-window.addEventListener('resize', () => imageModule.handleResize());
-window.addEventListener('orientationchange', () => {
-    setTimeout(() => imageModule.handleResize(), 500);
-});
 
 // VAD音声認識機能
 const speechModule = {
@@ -1378,11 +1297,10 @@ const app = {
     async init() {
         elements.vadControls.classList.add('hidden');
         
-        // ブラウザ検出モデルを読み込み
+        // ✅ ブラウザ検出モデルを読み込み
         await browserDetectionModule.loadModel();
         
         await cameraModule.startCamera();
-        // websocketModule.init(); // サーバー検出が不要なら削除
         speechModule.init();
         fullscreenModule.setupEventListeners();
         uiModule.setupVADButtons();
@@ -1395,7 +1313,11 @@ const app = {
         
         console.log('🐠 魚認識アプリが初期化されました (ブラウザ検出)');
     },
-    // ...
+
+    optimizeTouchEvents() {
+        document.addEventListener('touchstart', function(){}, {passive: true});
+        document.addEventListener('touchmove', function(){}, {passive: true});
+    }
 };
 app.init();
   </script>
