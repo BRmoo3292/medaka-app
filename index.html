@@ -1446,6 +1446,14 @@ const app = {
         document.addEventListener('touchmove', function(){}, {passive: true});
     }
 };
+// モデルが読み込まれているか確認
+console.log('モデル読み込み状態:', browserDetectionModule.modelLoaded);
+
+// 検出が実行されているか確認
+console.log('送信中フラグ:', appState.isSending);
+
+// フレーム更新が動いているか確認
+console.log('現在の表示モード:', appState.showingAnalysis ? '解析結果' : 'カメラ');
 app.init();
   </script>
 </body>
