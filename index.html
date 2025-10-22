@@ -1370,43 +1370,40 @@ const uiModule = {
         });
     },
     
-    setupSwitchButton() {
-        console.log('[初期化] 切り替えボタン設定開始');
+setupSwitchButton() {
+    console.log('[初期化] 切り替えボタン設定開始');
+    
+    elements.switchViewBtn.addEventListener('click', () => {
+        console.log('[ボタン] クリックされました');
         
-        // ✅ 既存のイベントリスナーをクリア
-        const newBtn = elements.switchViewBtn.cloneNode(true);
-        elements.switchViewBtn.parentNode.replaceChild(newBtn, elements.switchViewBtn);
-        elements.switchViewBtn = newBtn;
+        appState.showingAnalysis = !appState.showingAnalysis;
         
-        elements.switchViewBtn.addEventListener('click', () => {
-            console.log('[ボタン] クリックされました');
-            
-            appState.showingAnalysis = !appState.showingAnalysis;
-            
-            console.log('[ボタン] showingAnalysis =', appState.showingAnalysis);
-            
-            if (appState.showingAnalysis) {
-                // 解析結果モード
-                elements.video.style.display = 'none';
-                elements.displayCanvas.style.display = 'block';
-                elements.switchViewBtn.textContent = '📹 カメラ';
-                
-                console.log('[ボタン] 解析結果モードに切り替え完了');
-                console.log('[ボタン] Canvas display:', window.getComputedStyle(elements.displayCanvas).display);
-                
-            } else {
-                // カメラモード
-                elements.video.style.display = 'block';
-                elements.displayCanvas.style.display = 'none';
-                elements.switchViewBtn.textContent = '📊 解析結果';
-                
-                console.log('[ボタン] カメラモードに切り替え完了');
-            }
-        });
+        console.log('[ボタン] showingAnalysis =', appState.showingAnalysis);
         
-        console.log('[初期化] 切り替えボタン設定完了');
-    }
+        if (appState.showingAnalysis) {
+            // 解析結果モード
+            elements.video.classList.add('hidden');
+            elements.displayCanvas.classList.remove('hidden');
+            elements.switchViewBtn.textContent = '📹 カメラ';
+            
+            console.log('[ボタン] 解析結果モードに切り替え完了');
+            console.log('[ボタン] video hidden:', elements.video.classList.contains('hidden'));
+            console.log('[ボタン] canvas hidden:', elements.displayCanvas.classList.contains('hidden'));
+            
+        } else {
+            // カメラモード
+            elements.video.classList.remove('hidden');
+            elements.displayCanvas.classList.add('hidden');
+            elements.switchViewBtn.textContent = '📊 解析結果';
+            
+            console.log('[ボタン] カメラモードに切り替え完了');
+        }
+    });
+    
+    console.log('[初期化] 切り替えボタン設定完了');
+}
 };
+
 // アプリケーション初期化・メイン処理
 const app = {
     async init() {
