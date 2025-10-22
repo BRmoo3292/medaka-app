@@ -1364,7 +1364,6 @@ const uiModule = {
                 elements.vadControls.classList.remove('hidden');
                 elements.statusDiv.textContent = "🎤 「音声検出開始」ボタンを押してください";
                 
-                // 初期状態の設定
                 elements.vadStartBtn.disabled = false;
                 elements.vadStopBtn.disabled = true;
             }, 500);
@@ -1372,19 +1371,40 @@ const uiModule = {
     },
     
     setupSwitchButton() {
+        console.log('[初期化] 切り替えボタン設定開始');
+        
+        // ✅ 既存のイベントリスナーをクリア
+        const newBtn = elements.switchViewBtn.cloneNode(true);
+        elements.switchViewBtn.parentNode.replaceChild(newBtn, elements.switchViewBtn);
+        elements.switchViewBtn = newBtn;
+        
         elements.switchViewBtn.addEventListener('click', () => {
+            console.log('[ボタン] クリックされました');
+            
             appState.showingAnalysis = !appState.showingAnalysis;
             
+            console.log('[ボタン] showingAnalysis =', appState.showingAnalysis);
+            
             if (appState.showingAnalysis) {
-                elements.video.classList.add('hidden');
-                elements.displayCanvas.classList.remove('hidden');
+                // 解析結果モード
+                elements.video.style.display = 'none';
+                elements.displayCanvas.style.display = 'block';
                 elements.switchViewBtn.textContent = '📹 カメラ';
+                
+                console.log('[ボタン] 解析結果モードに切り替え完了');
+                console.log('[ボタン] Canvas display:', window.getComputedStyle(elements.displayCanvas).display);
+                
             } else {
-                elements.video.classList.remove('hidden');
-                elements.displayCanvas.classList.add('hidden');
+                // カメラモード
+                elements.video.style.display = 'block';
+                elements.displayCanvas.style.display = 'none';
                 elements.switchViewBtn.textContent = '📊 解析結果';
+                
+                console.log('[ボタン] カメラモードに切り替え完了');
             }
         });
+        
+        console.log('[初期化] 切り替えボタン設定完了');
     }
 };
 // アプリケーション初期化・メイン処理
