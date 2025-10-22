@@ -1406,7 +1406,15 @@ const app = {
         document.addEventListener('touchmove', function(){}, {passive: true});
     }
 };
-
+console.log('詳細確認:', {
+    'video.videoWidth': elements.video.videoWidth,
+    'video.videoHeight': elements.video.videoHeight,
+    'showingAnalysis': appState.showingAnalysis,
+    'isSending': appState.isSending,
+    'modelLoaded': browserDetectionModule.modelLoaded,
+    'video要素': elements.video,
+    'canvas要素': elements.displayCanvas
+});
 app.init();
   </script>
 </body>
