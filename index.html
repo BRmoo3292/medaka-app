@@ -54,6 +54,9 @@
     }
     
     #displayCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
       cursor: pointer;
       transition: transform 0.2s ease;
     }
@@ -1407,11 +1410,9 @@ const uiModule = {
             appState.showingAnalysis = !appState.showingAnalysis;
             
             if (appState.showingAnalysis) {
-                elements.video.classList.add('hidden');
                 elements.displayCanvas.classList.remove('hidden');
                 elements.switchViewBtn.textContent = '📹 カメラ';
             } else {
-                elements.video.classList.remove('hidden');
                 elements.displayCanvas.classList.add('hidden');
                 elements.switchViewBtn.textContent = '📊 解析結果';
             }
