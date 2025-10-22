@@ -1338,7 +1338,13 @@ const fullscreenModule = {
         elements.exitBtn.addEventListener('click', () => this.exitFullscreen());
     }
 };
-
+let frameCounter = 0;
+const originalSendFrame = imageModule.sendFrame;
+imageModule.sendFrame = async function() {
+    frameCounter++;
+    console.log(`[フレーム ${frameCounter}] 実行`);
+    return originalSendFrame.call(this);
+};
 // UI制御機能
 const uiModule = {
     setupVADButtons() {
@@ -1388,15 +1394,6 @@ const uiModule = {
         });
     }
 };
-setInterval(() => {
-    console.log('[状態]', {
-        isSending: appState.isSending,
-        modelLoaded: browserDetectionModule.modelLoaded,
-        showingAnalysis: appState.showingAnalysis,
-        videoWidth: elements.video.videoWidth,
-        videoHeight: elements.video.videoHeight
-    });
-}, 1000);
 // アプリケーション初期化・メイン処理
 const app = {
     async init() {
@@ -1424,6 +1421,7 @@ const app = {
         document.addEventListener('touchmove', function(){}, {passive: true});
     }
 };
+
 app.init();
   </script>
 </body>
