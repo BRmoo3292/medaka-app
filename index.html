@@ -369,7 +369,7 @@ const appState = {
 const browserDetectionModule = {
     session: null,
     modelLoaded: false,
-    inputSize: 320,  // ✅ 640 → 320 に変更（高速化）
+    inputSize: 640,  // ✅ 640 → 320 に変更（高速化）
 
     async loadModel() {
         try {
@@ -478,7 +478,7 @@ const browserDetectionModule = {
         console.log(`[後処理] 出力形状: [${output.dims.join(', ')}]`);
         
         const detections = [];
-        const confThreshold = 0.3;  // ✅ 閾値を下げる（0.5 → 0.3）
+        const confThreshold = 0.5;  // ✅ 閾値を下げる（0.5 → 0.3）
         
         const scaleX = videoElement.videoWidth / this.inputSize;
         const scaleY = videoElement.videoHeight / this.inputSize;
