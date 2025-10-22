@@ -770,74 +770,80 @@ const medakaVitalityModule = {
 const imageModule = {
     lastUpdateTime: 0,
     frameCount: 0,
+    videoReady: false,
     
- async sendFrame() {
-    this.frameCount++;
-    
-    if (!this.videoReady) {
-        if (elements.video.videoWidth > 0 && elements.video.videoHeight > 0) {
-            this.videoReady = true;
-            console.log('✅ ビデオ準備完了:', elements.video.videoWidth, 'x', elements.video.videoHeight);
-        } else {
-            if (this.frameCount % 30 === 0) {
-                console.log('⏳ ビデオ準備待ち...');
+    async sendFrame() {
+        this.frameCount++;
+        
+        if (!this.videoReady) {
+            if (elements.video.videoWidth > 0 && elements.video.videoHeight > 0) {
+                this.videoReady = true;
+                console.log('✅ ビデオ準備完了:', elements.video.videoWidth, 'x', elements.video.videoHeight);
+            } else {
+                if (this.frameCount % 30 === 0) {
+                    console.log('⏳ ビデオ準備待ち...');
+                }
+                return;
             }
+        }
+        
+        const videoWidth = elements.video.videoWidth;
+        const videoHeight = elements.video.videoHeight;
+        
+        if (videoWidth === 0 || videoHeight === 0) {
+            console.warn(`[Frame ${this.frameCount}] ビデオサイズが0`);
+            this.videoReady = false;
             return;
         }
-    }
-    
-    // ✅ この2行を先に定義
-    const videoWidth = elements.video.videoWidth;
-    const videoHeight = elements.video.videoHeight;
-    
-    if (videoWidth === 0 || videoHeight === 0) {
-        console.warn(`[Frame ${this.frameCount}] ビデオサイズが0`);
-        this.videoReady = false;
-        return;
-    }
-    
-    if (appState.isSending) return;
-    if (!browserDetectionModule.modelLoaded) return;
-    if (!appState.showingAnalysis) return;
-    
-    console.log(`[Frame ${this.frameCount}] 解析開始`);
-    appState.isSending = true;
-    
-    try {
-        const detections = await browserDetectionModule.detectObjects(elements.video);
-        console.log(`[Frame ${this.frameCount}] 検出: ${detections.length}匹`);
         
-        // Canvas更新（videoWidthはすでに定義されている）
-        elements.displayCanvas.width = videoWidth;
-        elements.displayCanvas.height = videoHeight;
+        if (appState.isSending) return;
+        if (!browserDetectionModule.modelLoaded) return;
+        if (!appState.showingAnalysis) return;
         
-        // 毎回getContextを呼ぶ
-        const ctx = elements.displayCanvas.getContext('2d');
+        console.log(`[Frame ${this.frameCount}] 解析開始`);
+        appState.isSending = true;
         
-        ctx.clearRect(0, 0, videoWidth, videoHeight);
-        ctx.drawImage(elements.video, 0, 0, videoWidth, videoHeight);
-        
-        console.log(`[Frame ${this.frameCount}] Canvas更新完了`);
-        
-        if (detections.length > 0) {
-            browserDetectionModule.drawDetections(elements.displayCanvas, detections);
+        try {
+            const detections = await browserDetectionModule.detectObjects(elements.video);
+            console.log(`[Frame ${this.frameCount}] 検出: ${detections.length}匹`);
             
-            const vitality = medakaVitalityModule.update(detections);
-            if (vitality.dataPoints >= 30) {
-                medakaVitalityModule.sendVitalityToServer(vitality).catch(() => {});
+            // ✅ requestAnimationFrameでCanvas更新を包む
+            requestAnimationFrame(() => {
+                // Canvas更新
+                elements.displayCanvas.width = videoWidth;
+                elements.displayCanvas.height = videoHeight;
+                
+                const ctx = elements.displayCanvas.getContext('2d');
+                
+                ctx.clearRect(0, 0, videoWidth, videoHeight);
+                ctx.drawImage(elements.video, 0, 0, videoWidth, videoHeight);
+                
+                console.log(`[Frame ${this.frameCount}] Canvas更新完了`);
+                
+                if (detections.length > 0) {
+                    browserDetectionModule.drawDetections(elements.displayCanvas, detections);
+                }
+                
+                if (appState.isFullscreen) {
+                    this.updateFullscreenWithCanvas();
+                }
+            });
+            
+            // 元気度計算
+            if (detections.length > 0) {
+                const vitality = medakaVitalityModule.update(detections);
+                if (vitality.dataPoints >= 30) {
+                    medakaVitalityModule.sendVitalityToServer(vitality).catch(() => {});
+                }
             }
+            
+        } catch (error) {
+            console.error(`❌ [Frame ${this.frameCount}] エラー:`, error);
+        } finally {
+            appState.isSending = false;
         }
-        
-        if (appState.isFullscreen) {
-            this.updateFullscreenWithCanvas();
-        }
-        
-    } catch (error) {
-        console.error(`❌ [Frame ${this.frameCount}] エラー:`, error);
-    } finally {
-        appState.isSending = false;
-    }
-},   
+    },
+    
     updateFullscreenWithCanvas() {
         if (!appState.isFullscreen) return;
         
