@@ -799,22 +799,28 @@ const medakaVitalityModule = {
 // 画像処理・送信機能
 const imageModule = {
     async sendFrame() {
-        if (appState.isSending || !elements.video.videoWidth || !elements.video.videoHeight) return;
+        // ✅ 早期リターン時も確実にフラグをリセット
+        if (!elements.video.videoWidth || !elements.video.videoHeight) {
+            return;
+        }
+        
+        if (appState.isSending) {
+            console.log('[送信] スキップ - 前回の処理が未完了');
+            return;
+        }
+        
+        if (!browserDetectionModule.modelLoaded) {
+            console.log('[検出] モデル未読み込み - スキップ');
+            return;
+        }
         
         appState.isSending = true;
         
         try {
-            // ✅ モデルが読み込まれていない場合はスキップ
-            if (!browserDetectionModule.modelLoaded) {
-                console.log('[検出] モデル未読み込み - スキップ');
-                appState.isSending = false;
-                return;
-            }
-
-            // ✅ ブラウザで検出実行
+            // ブラウザで検出実行
             const detections = await browserDetectionModule.detectObjects(elements.video);
             
-            // ✅ 常にdisplayCanvasを更新
+            // 常にdisplayCanvasを更新
             elements.displayCanvas.width = elements.video.videoWidth;
             elements.displayCanvas.height = elements.video.videoHeight;
             
@@ -835,7 +841,10 @@ const imageModule = {
                 
                 // サーバーに元気度を送信（会話機能で使用）
                 if (vitality.dataPoints >= 30) {
-                    await medakaVitalityModule.sendVitalityToServer(vitality);
+                    // ✅ awaitを削除（非同期で送信、待たない）
+                    medakaVitalityModule.sendVitalityToServer(vitality).catch(err => {
+                        console.error('[元気度送信] エラー:', err);
+                    });
                 }
             } else {
                 // 検出がない場合も元気度表示エリアをクリア/表示
@@ -846,21 +855,20 @@ const imageModule = {
                 ctx.fillText('メダカを探しています...', 20, 50);
             }
             
-            // ✅ フルスクリーン表示中も更新
+            // フルスクリーン表示中も更新
             if (appState.isFullscreen && appState.showingAnalysis) {
                 this.updateFullscreenWithCanvas();
             }
             
         } catch (error) {
             console.error("検出エラー:", error);
+            console.error("エラースタック:", error.stack);
         } finally {
+            // ✅ 必ず実行されるようにfinallyで確実にリセット
             appState.isSending = false;
         }
     },
     
-    /**
-     * Canvas上に元気度情報を描画
-     */
     drawVitalityInfo(ctx, vitality) {
         const padding = 10;
         const boxWidth = 200;
@@ -881,9 +889,6 @@ const imageModule = {
         ctx.fillText(`速度: ${vitality.avgSpeed} px/s`, padding + 10, padding + 75);
     },
     
-    /**
-     * フルスクリーン表示時にCanvasを更新
-     */
     updateFullscreenWithCanvas() {
         if (!appState.isFullscreen) return;
         
