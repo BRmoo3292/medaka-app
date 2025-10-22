@@ -771,80 +771,73 @@ const imageModule = {
     lastUpdateTime: 0,
     frameCount: 0,
     
-    async sendFrame() {
-        this.frameCount++;
-        
-        console.log(`[Frame ${this.frameCount}] 開始`, {
-            showingAnalysis: appState.showingAnalysis,
-            isSending: appState.isSending,
-            modelLoaded: browserDetectionModule.modelLoaded
-        });
-        
-        if (!elements.video.videoWidth || !elements.video.videoHeight) {
-            console.log('[Frame] スキップ: ビデオサイズ未設定');
-            return;
-        }
-        
-        if (appState.isSending) {
-            console.log('[Frame] スキップ: 処理中');
-            return;
-        }
-        
-        if (!browserDetectionModule.modelLoaded) {
-            console.log('[Frame] スキップ: モデル未読み込み');
-            return;
-        }
-        
-        if (!appState.showingAnalysis) {
-            console.log('[Frame] カメラモード - スキップ');
-            return;
-        }
-        console.log('詳細確認:', {
-    'video.videoWidth': elements.video.videoWidth,
-    'video.videoHeight': elements.video.videoHeight,
-    'showingAnalysis': appState.showingAnalysis,
-    'isSending': appState.isSending,
-    'modelLoaded': browserDetectionModule.modelLoaded,
-    'video要素': elements.video,
-    'canvas要素': elements.displayCanvas
-});
-        console.log('[Frame] 解析結果モード - 処理開始');
-        appState.isSending = true;
-        
-        try {    
-            const detections = await browserDetectionModule.detectObjects(elements.video);
-            elements.displayCanvas.width = videoWidth;
-            elements.displayCanvas.height = videoHeight;
-            
-            const ctx = elements.displayCanvas.getContext('2d');
-            ctx.clearRect(0, 0, videoWidth, videoHeight);
-            ctx.drawImage(elements.video, 0, 0);
-            
-            console.log('[Frame] ビデオ描画完了');
-            
-            if (detections.length > 0) {
-                browserDetectionModule.drawDetections(elements.displayCanvas, detections);
-                console.log('[Frame] バウンディングボックス描画完了');
-                
-                const vitality = medakaVitalityModule.update(detections);
-                if (vitality.dataPoints >= 30) {
-                    medakaVitalityModule.sendVitalityToServer(vitality).catch(() => {});
-                }
+ async sendFrame() {
+    this.frameCount++;
+    
+    if (!this.videoReady) {
+        if (elements.video.videoWidth > 0 && elements.video.videoHeight > 0) {
+            this.videoReady = true;
+            console.log('✅ ビデオ準備完了:', elements.video.videoWidth, 'x', elements.video.videoHeight);
+        } else {
+            if (this.frameCount % 30 === 0) {
+                console.log('⏳ ビデオ準備待ち...');
             }
-            
-            if (appState.isFullscreen) {
-                this.updateFullscreenWithCanvas();
-            }
-            
-            console.log('[Frame] 処理完了');
-            
-        } catch (error) {
-            console.error("❌ [Frame] エラー:", error);
-        } finally {
-            appState.isSending = false;
-            console.log('[Frame] フラグリセット');
+            return;
         }
-    },   
+    }
+    
+    // ✅ この2行を先に定義
+    const videoWidth = elements.video.videoWidth;
+    const videoHeight = elements.video.videoHeight;
+    
+    if (videoWidth === 0 || videoHeight === 0) {
+        console.warn(`[Frame ${this.frameCount}] ビデオサイズが0`);
+        this.videoReady = false;
+        return;
+    }
+    
+    if (appState.isSending) return;
+    if (!browserDetectionModule.modelLoaded) return;
+    if (!appState.showingAnalysis) return;
+    
+    console.log(`[Frame ${this.frameCount}] 解析開始`);
+    appState.isSending = true;
+    
+    try {
+        const detections = await browserDetectionModule.detectObjects(elements.video);
+        console.log(`[Frame ${this.frameCount}] 検出: ${detections.length}匹`);
+        
+        // Canvas更新（videoWidthはすでに定義されている）
+        elements.displayCanvas.width = videoWidth;
+        elements.displayCanvas.height = videoHeight;
+        
+        // 毎回getContextを呼ぶ
+        const ctx = elements.displayCanvas.getContext('2d');
+        
+        ctx.clearRect(0, 0, videoWidth, videoHeight);
+        ctx.drawImage(elements.video, 0, 0, videoWidth, videoHeight);
+        
+        console.log(`[Frame ${this.frameCount}] Canvas更新完了`);
+        
+        if (detections.length > 0) {
+            browserDetectionModule.drawDetections(elements.displayCanvas, detections);
+            
+            const vitality = medakaVitalityModule.update(detections);
+            if (vitality.dataPoints >= 30) {
+                medakaVitalityModule.sendVitalityToServer(vitality).catch(() => {});
+            }
+        }
+        
+        if (appState.isFullscreen) {
+            this.updateFullscreenWithCanvas();
+        }
+        
+    } catch (error) {
+        console.error(`❌ [Frame ${this.frameCount}] エラー:`, error);
+    } finally {
+        appState.isSending = false;
+    }
+},   
     updateFullscreenWithCanvas() {
         if (!appState.isFullscreen) return;
         
