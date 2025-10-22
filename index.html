@@ -330,7 +330,7 @@
 // 設定・定数
 const CONFIG = {
     SERVER_URL: window.location.origin,
-    FRAME_RATE: 200,
+    FRAME_RATE: 100,
     PROFILE_ID: 1
 };
 
@@ -769,61 +769,62 @@ const medakaVitalityModule = {
 
 const imageModule = {
     lastUpdateTime: 0,
-    minUpdateInterval: 100,  // 最低100msごとに更新（高速化）
+    frameCount: 0,
     
     async sendFrame() {
-        // 早期リターン
-        if (!elements.video.videoWidth || !elements.video.videoHeight) return;
-        if (appState.isSending) return;
-        if (!browserDetectionModule.modelLoaded) return;
+        this.frameCount++;
         
-        // ✅ 解析結果モードでない場合はスキップ
+        console.log(`[Frame ${this.frameCount}] 開始`, {
+            showingAnalysis: appState.showingAnalysis,
+            isSending: appState.isSending,
+            modelLoaded: browserDetectionModule.modelLoaded
+        });
+        
+        if (!elements.video.videoWidth || !elements.video.videoHeight) {
+            console.log('[Frame] スキップ: ビデオサイズ未設定');
+            return;
+        }
+        
+        if (appState.isSending) {
+            console.log('[Frame] スキップ: 処理中');
+            return;
+        }
+        
+        if (!browserDetectionModule.modelLoaded) {
+            console.log('[Frame] スキップ: モデル未読み込み');
+            return;
+        }
+        
         if (!appState.showingAnalysis) {
-            // カメラモードでも元気度計算は継続（軽量処理）
-            const now = performance.now();
-            if (now - this.lastUpdateTime < 1000) return;  // 1秒に1回だけ
-            
-            this.lastUpdateTime = now;
-            appState.isSending = true;
-            
-            try {
-                const detections = await browserDetectionModule.detectObjects(elements.video);
-                if (detections.length > 0) {
-                    const vitality = medakaVitalityModule.update(detections);
-                    if (vitality.dataPoints >= 30) {
-                        medakaVitalityModule.sendVitalityToServer(vitality).catch(() => {});
-                    }
-                }
-            } catch (error) {
-                console.error('[カメラモード検出エラー]', error);
-            } finally {
-                appState.isSending = false;
-            }
-            
+            console.log('[Frame] カメラモード - スキップ');
             return;
         }
         
-        // ✅ 解析結果モード: フレーム更新制限
-        const now = performance.now();
-        if (now - this.lastUpdateTime < this.minUpdateInterval) {
-            return;
-        }
-        
-        this.lastUpdateTime = now;
+        console.log('[Frame] 解析結果モード - 処理開始');
         appState.isSending = true;
         
         try {
+            console.log('[Frame] 検出処理開始');
             const detections = await browserDetectionModule.detectObjects(elements.video);
+            console.log(`[Frame] 検出完了: ${detections.length}匹`);
             
-            // Canvas更新
-            elements.displayCanvas.width = elements.video.videoWidth;
-            elements.displayCanvas.height = elements.video.videoHeight;
+            const videoWidth = elements.video.videoWidth;
+            const videoHeight = elements.video.videoHeight;
             
-            const ctx = elements.displayCanvas.getContext('2d', { alpha: false });  // ✅ 高速化
+            console.log(`[Frame] Canvas更新: ${videoWidth}x${videoHeight}`);
+            
+            elements.displayCanvas.width = videoWidth;
+            elements.displayCanvas.height = videoHeight;
+            
+            const ctx = displayCtx;
+            ctx.clearRect(0, 0, videoWidth, videoHeight);
             ctx.drawImage(elements.video, 0, 0);
+            
+            console.log('[Frame] ビデオ描画完了');
             
             if (detections.length > 0) {
                 browserDetectionModule.drawDetections(elements.displayCanvas, detections);
+                console.log('[Frame] バウンディングボックス描画完了');
                 
                 const vitality = medakaVitalityModule.update(detections);
                 if (vitality.dataPoints >= 30) {
@@ -835,13 +836,15 @@ const imageModule = {
                 this.updateFullscreenWithCanvas();
             }
             
+            console.log('[Frame] 処理完了');
+            
         } catch (error) {
-            console.error("❌ 検出エラー:", error);
+            console.error("❌ [Frame] エラー:", error);
         } finally {
             appState.isSending = false;
+            console.log('[Frame] フラグリセット');
         }
-    },
-    
+    },   
     updateFullscreenWithCanvas() {
         if (!appState.isFullscreen) return;
         
