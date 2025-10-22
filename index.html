@@ -369,7 +369,7 @@ const appState = {
 const browserDetectionModule = {
     session: null,
     modelLoaded: false,
-    inputSize: 640,  // ✅ 640 → 320 に変更（高速化）
+    inputSize: 640, 
 
     async loadModel() {
         try {
@@ -799,7 +799,15 @@ const imageModule = {
             console.log('[Frame] カメラモード - スキップ');
             return;
         }
-        
+        console.log('詳細確認:', {
+    'video.videoWidth': elements.video.videoWidth,
+    'video.videoHeight': elements.video.videoHeight,
+    'showingAnalysis': appState.showingAnalysis,
+    'isSending': appState.isSending,
+    'modelLoaded': browserDetectionModule.modelLoaded,
+    'video要素': elements.video,
+    'canvas要素': elements.displayCanvas
+});
         console.log('[Frame] 解析結果モード - 処理開始');
         appState.isSending = true;
         
@@ -1406,15 +1414,7 @@ const app = {
         document.addEventListener('touchmove', function(){}, {passive: true});
     }
 };
-console.log('詳細確認:', {
-    'video.videoWidth': elements.video.videoWidth,
-    'video.videoHeight': elements.video.videoHeight,
-    'showingAnalysis': appState.showingAnalysis,
-    'isSending': appState.isSending,
-    'modelLoaded': browserDetectionModule.modelLoaded,
-    'video要素': elements.video,
-    'canvas要素': elements.displayCanvas
-});
+
 app.init();
   </script>
 </body>
