@@ -811,20 +811,12 @@ const imageModule = {
         console.log('[Frame] 解析結果モード - 処理開始');
         appState.isSending = true;
         
-        try {
-            console.log('[Frame] 検出処理開始');
+        try {    
             const detections = await browserDetectionModule.detectObjects(elements.video);
-            console.log(`[Frame] 検出完了: ${detections.length}匹`);
-            
-            const videoWidth = elements.video.videoWidth;
-            const videoHeight = elements.video.videoHeight;
-            
-            console.log(`[Frame] Canvas更新: ${videoWidth}x${videoHeight}`);
-            
             elements.displayCanvas.width = videoWidth;
             elements.displayCanvas.height = videoHeight;
             
-            const ctx = displayCtx;
+            const ctx = elements.displayCanvas.getContext('2d');
             ctx.clearRect(0, 0, videoWidth, videoHeight);
             ctx.drawImage(elements.video, 0, 0);
             
