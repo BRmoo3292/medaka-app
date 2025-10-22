@@ -888,6 +888,7 @@ const imageModule = {
         fullscreenCtx.drawImage(elements.displayCanvas, drawX, drawY, drawWidth, drawHeight);
     }
 };// VAD音声認識機能
+
 const speechModule = {
     mediaRecorder: null,
     audioChunks: [],
@@ -1387,7 +1388,15 @@ const uiModule = {
         });
     }
 };
-
+setInterval(() => {
+    console.log('[状態]', {
+        isSending: appState.isSending,
+        modelLoaded: browserDetectionModule.modelLoaded,
+        showingAnalysis: appState.showingAnalysis,
+        videoWidth: elements.video.videoWidth,
+        videoHeight: elements.video.videoHeight
+    });
+}, 1000);
 // アプリケーション初期化・メイン処理
 const app = {
     async init() {
@@ -1415,14 +1424,6 @@ const app = {
         document.addEventListener('touchmove', function(){}, {passive: true});
     }
 };
-// モデルが読み込まれているか確認
-console.log('モデル読み込み状態:', browserDetectionModule.modelLoaded);
-
-// 検出が実行されているか確認
-console.log('送信中フラグ:', appState.isSending);
-
-// フレーム更新が動いているか確認
-console.log('現在の表示モード:', appState.showingAnalysis ? '解析結果' : 'カメラ');
 app.init();
   </script>
 </body>
