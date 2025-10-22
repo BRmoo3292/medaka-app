@@ -560,23 +560,29 @@ calculateIoU(box1, box2) {
     return intersectionArea / unionArea;
 },
 
-    drawDetections(canvas, detections) {
+drawDetections(canvas, detections) {
         const ctx = canvas.getContext('2d');
         
-        detections.forEach(det => {
-            // バウンディングボックス描画
+        detections.forEach((det, index) => {
+            // バウンディングボックスのみ描画
             ctx.strokeStyle = '#00ff00';
             ctx.lineWidth = 3;
             ctx.strokeRect(det.x, det.y, det.width, det.height);
             
-            // ラベル描画
-            ctx.fillStyle = '#00ff00';
-            ctx.font = '16px Arial';
-            ctx.fillText(`メダカ ${(det.confidence * 100).toFixed(0)}%`, 
-                        det.x, det.y - 5);
+            // 簡潔なラベル（メダカ番号と信頼度のみ）
+            const label = `メダカ${index + 1}: ${(det.confidence * 100).toFixed(0)}%`;
+            
+            // ラベル背景
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.8)';
+            const textWidth = ctx.measureText(label).width;
+            ctx.fillRect(det.x, det.y - 25, textWidth + 20, 25);
+            
+            // ラベルテキスト
+            ctx.fillStyle = '#000000';
+            ctx.font = 'bold 14px Arial';
+            ctx.fillText(label, det.x + 5, det.y - 7);
         });
-    }
-};
+    }};
 // カメラ機能
 const cameraModule = {
     async startCamera() {
@@ -598,108 +604,88 @@ const cameraModule = {
 
 const medakaVitalityModule = {
     // 追跡データ
-    trackHistory: new Map(), // メダカID -> 位置履歴
-    speedHistory: [],        // 速度履歴（直近75フレーム分）
-    maxHistoryLength: 75,    // 5秒分の履歴 (15 FPS想定)
-    fps: 15,                 // 実効FPS
+    trackHistory: new Map(),
+    speedHistory: [],
+    maxHistoryLength: 75,
+    fps: 15,
     
     // 元気度判定の閾値（ピクセル/秒）
     thresholds: {
-        veryActive: 50,   // 50px/秒以上 → 元気
-        active: 20,       // 20-50px/秒 → 普通
-        slow: 5,          // 5-20px/秒 → やや元気がない
-        lethargic: 0      // 5px/秒未満 → ほとんど動かない
+        veryActive: 50,
+        active: 20,
+        slow: 5,
+        lethargic: 0
     },
     
-    // 前フレームのタイムスタンプ
     lastFrameTime: null,
     
-    /**
-     * 検出結果から速度を計算して元気度を更新
-     */
     update(detections) {
         const currentTime = performance.now();
         
         // FPS計算
         if (this.lastFrameTime) {
-            const deltaTime = (currentTime - this.lastFrameTime) / 1000; // 秒単位
+            const deltaTime = (currentTime - this.lastFrameTime) / 1000;
             this.fps = 1 / deltaTime;
         }
         this.lastFrameTime = currentTime;
         
         // 各メダカの速度を計算
         detections.forEach((det, index) => {
-            const medakaId = index; // 簡易的にインデックスをIDとして使用
+            const medakaId = index;
             const currentPos = { x: det.x + det.width / 2, y: det.y + det.height / 2 };
             
-            // 速度計算
             const speed = this.calculateSpeed(medakaId, currentPos);
             
             if (speed !== null) {
                 this.speedHistory.push(speed);
                 
-                // 履歴の長さを制限
                 if (this.speedHistory.length > this.maxHistoryLength) {
                     this.speedHistory.shift();
                 }
             }
             
-            // 位置を履歴に追加
             if (!this.trackHistory.has(medakaId)) {
                 this.trackHistory.set(medakaId, []);
             }
             const history = this.trackHistory.get(medakaId);
             history.push({ pos: currentPos, time: currentTime });
             
-            // 履歴を制限（直近10フレーム）
             if (history.length > 10) {
                 history.shift();
             }
         });
         
-        // 元気度を計算
         const vitality = this.calculateVitality();
-        
-        // デバッグ情報を表示
         this.logVitalityInfo(vitality, detections.length);
         
         return vitality;
     },
     
-    /**
-     * メダカの速度を計算（ピクセル/秒）
-     */
     calculateSpeed(medakaId, currentPos) {
         const history = this.trackHistory.get(medakaId);
         
         if (!history || history.length < 2) {
-            return null; // 履歴が不足
+            return null;
         }
         
         const prevData = history[history.length - 1];
         const prevPos = prevData.pos;
         const prevTime = prevData.time;
         
-        // 距離を計算（ピクセル）
         const distance = Math.sqrt(
             Math.pow(currentPos.x - prevPos.x, 2) + 
             Math.pow(currentPos.y - prevPos.y, 2)
         );
         
-        // 時間差（秒）
         const deltaTime = (performance.now() - prevTime) / 1000;
         
         if (deltaTime === 0) return null;
         
-        // 速度（ピクセル/秒）
         const speed = distance / deltaTime;
         
         return speed;
     },
     
-    /**
-     * 直近の速度履歴から元気度を計算
-     */
     calculateVitality() {
         if (this.speedHistory.length === 0) {
             return {
@@ -707,36 +693,35 @@ const medakaVitalityModule = {
                 statusJa: "不明",
                 avgSpeed: 0,
                 score: 0,
-                color: "#999999"
+                color: "#999999",
+                dataPoints: 0
             };
         }
         
-        // 平均速度を計算
         const avgSpeed = this.speedHistory.reduce((sum, s) => sum + s, 0) / this.speedHistory.length;
         
-        // 元気度を判定
         let status, statusJa, score, color;
         
         if (avgSpeed >= this.thresholds.veryActive) {
             status = "Active";
             statusJa = "元気";
             score = 100;
-            color = "#00ff00"; // 緑
+            color = "#00ff00";
         } else if (avgSpeed >= this.thresholds.active) {
             status = "Normal";
             statusJa = "普通";
             score = 70;
-            color = "#ffff00"; // 黄色
+            color = "#ffff00";
         } else if (avgSpeed >= this.thresholds.slow) {
             status = "Slow";
             statusJa = "やや元気がない";
             score = 40;
-            color = "#ff9900"; // オレンジ
+            color = "#ff9900";
         } else {
             status = "Lethargic";
             statusJa = "ほとんど動かない";
             score = 10;
-            color = "#ff0000"; // 赤
+            color = "#ff0000";
         }
         
         return {
@@ -749,9 +734,6 @@ const medakaVitalityModule = {
         };
     },
     
-    /**
-     * デバッグ情報をコンソールに出力
-     */
     logVitalityInfo(vitality, detectionCount) {
         if (this.speedHistory.length > 0 && this.speedHistory.length % 15 === 0) {
             console.log("\n" + "=".repeat(50));
@@ -766,12 +748,8 @@ const medakaVitalityModule = {
         }
     },
     
-    /**
-     * 元気度をサーバーに送信（既存のAPIとの連携用）
-     */
     async sendVitalityToServer(vitality) {
         try {
-            // サーバー側のlatest_healthを更新
             await fetch(`${CONFIG.SERVER_URL}/update_health`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -786,107 +764,92 @@ const medakaVitalityModule = {
         }
     },
     
-    /**
-     * リセット（新しいセッション開始時など）
-     */
     reset() {
         this.trackHistory.clear();
         this.speedHistory = [];
         this.lastFrameTime = null;
         console.log("[元気度] 追跡データをリセットしました");
     }
-};
-// 画像処理・送信機能
-const imageModule = {
+};// 画像処理・送信機能
+
+const imageModule = {   
     async sendFrame() {
-        // ✅ 早期リターン時も確実にフラグをリセット
-        if (!elements.video.videoWidth || !elements.video.videoHeight) {
-            return;
-        }
-        
-        if (appState.isSending) {
-            console.log('[送信] スキップ - 前回の処理が未完了');
-            return;
-        }
-        
-        if (!browserDetectionModule.modelLoaded) {
-            console.log('[検出] モデル未読み込み - スキップ');
-            return;
-        }
+        if (!elements.video.videoWidth || !elements.video.videoHeight) return;
+        if (appState.isSending) return;
+        if (!browserDetectionModule.modelLoaded) return;
         
         appState.isSending = true;
         
         try {
-            // ブラウザで検出実行
-            const detections = await browserDetectionModule.detectObjects(elements.video);
+            let detections = [];
             
-            // 常にdisplayCanvasを更新
-            elements.displayCanvas.width = elements.video.videoWidth;
-            elements.displayCanvas.height = elements.video.videoHeight;
-            
-            const ctx = elements.displayCanvas.getContext('2d');
-            
-            // 最新のビデオフレームを描画
-            ctx.drawImage(elements.video, 0, 0);
-            
-            // 検出結果を描画
-            if (detections.length > 0) {
-                browserDetectionModule.drawDetections(elements.displayCanvas, detections);
-                
-                // 🐟 元気度を計算・更新
-                const vitality = medakaVitalityModule.update(detections);
-                
-                // 画面に元気度を表示
-                this.drawVitalityInfo(ctx, vitality);
-                
-                // サーバーに元気度を送信（会話機能で使用）
-                if (vitality.dataPoints >= 30) {
-                    // ✅ awaitを削除（非同期で送信、待たない）
-                    medakaVitalityModule.sendVitalityToServer(vitality).catch(err => {
-                        console.error('[元気度送信] エラー:', err);
-                    });
-                }
-            } else {
-                // 検出がない場合も元気度表示エリアをクリア/表示
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                ctx.fillRect(10, 10, 200, 80);
-                ctx.fillStyle = '#ffffff';
-                ctx.font = '16px Arial';
-                ctx.fillText('メダカを探しています...', 20, 50);
+            try {
+                detections = await browserDetectionModule.detectObjects(elements.video);
+            } catch (detectError) {
+                console.error('[検出処理エラー]', detectError);
+                detections = [];
             }
             
-            // フルスクリーン表示中も更新
-            if (appState.isFullscreen && appState.showingAnalysis) {
-                this.updateFullscreenWithCanvas();
+            // 解析結果表示時のみCanvasを更新
+            if (appState.showingAnalysis) {
+                elements.displayCanvas.width = elements.video.videoWidth;
+                elements.displayCanvas.height = elements.video.videoHeight;
+                
+                const ctx = elements.displayCanvas.getContext('2d');
+                
+                // 最新のビデオフレームを描画
+                ctx.drawImage(elements.video, 0, 0);
+                
+                if (detections.length > 0) {
+                    try {
+                        // ✅ バウンディングボックスのみ描画
+                        browserDetectionModule.drawDetections(elements.displayCanvas, detections);
+                    } catch (drawError) {
+                        console.error('[描画エラー]', drawError);
+                    }
+                    
+                    try {
+                        // 元気度計算（サーバー送信用）
+                        const vitality = medakaVitalityModule.update(detections);
+                        
+                        if (vitality.dataPoints >= 30) {
+                            medakaVitalityModule.sendVitalityToServer(vitality).catch(err => {
+                                console.error('[元気度送信エラー]', err);
+                            });
+                        }
+                    } catch (vitalityError) {
+                        console.error('[元気度計算エラー]', vitalityError);
+                    }
+                } else {
+                    // メダカが検出されない場合（何も表示しない、映像のみ）
+                    // 必要なら「メダカを探しています」などのメッセージを追加可能
+                }
+                
+                // フルスクリーン表示中も更新
+                if (appState.isFullscreen) {
+                    this.updateFullscreenWithCanvas();
+                }
+            } else {
+                // カメラモードでも元気度計算は継続（サーバー送信用）
+                if (detections.length > 0) {
+                    try {
+                        const vitality = medakaVitalityModule.update(detections);
+                        if (vitality.dataPoints >= 30) {
+                            medakaVitalityModule.sendVitalityToServer(vitality).catch(err => {
+                                console.error('[元気度送信エラー]', err);
+                            });
+                        }
+                    } catch (vitalityError) {
+                        console.error('[元気度計算エラー]', vitalityError);
+                    }
+                }
             }
             
         } catch (error) {
-            console.error("検出エラー:", error);
-            console.error("エラースタック:", error.stack);
+            console.error("❌ 全体エラー:", error);
         } finally {
-            // ✅ 必ず実行されるようにfinallyで確実にリセット
             appState.isSending = false;
         }
-    },
-    
-    drawVitalityInfo(ctx, vitality) {
-        const padding = 10;
-        const boxWidth = 200;
-        const boxHeight = 80;
-        
-        // 半透明の背景
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(padding, padding, boxWidth, boxHeight);
-        
-        // 元気度テキスト
-        ctx.fillStyle = vitality.color;
-        ctx.font = 'bold 20px Arial';
-        ctx.fillText(`元気度: ${vitality.score}`, padding + 10, padding + 30);
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '16px Arial';
-        ctx.fillText(`状態: ${vitality.statusJa}`, padding + 10, padding + 55);
-        ctx.fillText(`速度: ${vitality.avgSpeed} px/s`, padding + 10, padding + 75);
     },
     
     updateFullscreenWithCanvas() {
@@ -922,7 +885,6 @@ const imageModule = {
         fullscreenCtx.drawImage(elements.displayCanvas, drawX, drawY, drawWidth, drawHeight);
     }
 };
-
 // VAD音声認識機能
 const speechModule = {
     mediaRecorder: null,
