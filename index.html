@@ -772,7 +772,7 @@ const medakaVitalityModule = {
     }
 };// 画像処理・送信機能
 
-const imageModule = {   
+const imageModule = {
     async sendFrame() {
         if (!elements.video.videoWidth || !elements.video.videoHeight) return;
         if (appState.isSending) return;
@@ -802,15 +802,18 @@ const imageModule = {
                 
                 if (detections.length > 0) {
                     try {
-                        // ✅ バウンディングボックスのみ描画
+                        // バウンディングボックスのみ描画
                         browserDetectionModule.drawDetections(elements.displayCanvas, detections);
                     } catch (drawError) {
                         console.error('[描画エラー]', drawError);
                     }
                     
                     try {
-                        // 元気度計算（サーバー送信用）
+                        // 元気度計算（サーバー送信用のみ、画面表示なし）
                         const vitality = medakaVitalityModule.update(detections);
+                        
+                        // ❌ この行を削除
+                        // this.drawVitalityInfo(ctx, vitality);
                         
                         if (vitality.dataPoints >= 30) {
                             medakaVitalityModule.sendVitalityToServer(vitality).catch(err => {
@@ -820,9 +823,6 @@ const imageModule = {
                     } catch (vitalityError) {
                         console.error('[元気度計算エラー]', vitalityError);
                     }
-                } else {
-                    // メダカが検出されない場合（何も表示しない、映像のみ）
-                    // 必要なら「メダカを探しています」などのメッセージを追加可能
                 }
                 
                 // フルスクリーン表示中も更新
@@ -830,7 +830,7 @@ const imageModule = {
                     this.updateFullscreenWithCanvas();
                 }
             } else {
-                // カメラモードでも元気度計算は継続（サーバー送信用）
+                // カメラモードでも元気度計算は継続
                 if (detections.length > 0) {
                     try {
                         const vitality = medakaVitalityModule.update(detections);
@@ -851,6 +851,9 @@ const imageModule = {
             appState.isSending = false;
         }
     },
+    
+    // ❌ drawVitalityInfo() メソッドを完全に削除
+    // drawVitalityInfo(ctx, vitality) { ... }  ← この関数全体を削除
     
     updateFullscreenWithCanvas() {
         if (!appState.isFullscreen) return;
@@ -884,8 +887,7 @@ const imageModule = {
         fullscreenCtx.clearRect(0, 0, screenWidth, screenHeight);
         fullscreenCtx.drawImage(elements.displayCanvas, drawX, drawY, drawWidth, drawHeight);
     }
-};
-// VAD音声認識機能
+};// VAD音声認識機能
 const speechModule = {
     mediaRecorder: null,
     audioChunks: [],
