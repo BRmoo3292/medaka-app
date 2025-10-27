@@ -658,7 +658,7 @@ async def talk_with_fish_text(request: Request):
         conversation_history[CURRENT_PROFILE_ID] = conversation_history[CURRENT_PROFILE_ID][-20:]
 
     print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
-    t2 = time.time()
+
     async def audio_stream():
         async with openai_client.audio.speech.with_streaming_response.create(
             model="gpt-4o-mini-tts",
@@ -674,6 +674,9 @@ async def talk_with_fish_text(request: Request):
         ) as response:
             async for chunk in response.iter_bytes():
                 yield chunk 
+
+        end_total = time.time()
+        print(f"[総処理時間] {end_total - start_total:.2f}秒（ストリーミング開始まで）")
         # ストリーミングレスポンスを返す
     return StreamingResponse(
             audio_stream(),
