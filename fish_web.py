@@ -296,7 +296,7 @@ async def talk_with_fish_audio(file: UploadFile):
 async def generate_tts(text: str) -> str:
     """TTS生成（非同期関数）"""
     async with openai_client.audio.speech.with_streaming_response.create(
-        model="gpt-4o-mini-tts",
+        model="tts-1",
         voice="coral",
         instructions="""
         Voice Affect:のんびりしていて、かわいらしい無邪気さ  
