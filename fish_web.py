@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 import time
 import numpy as np
+import asyncio
 from collections import defaultdict, deque
 import tempfile
 import os
@@ -219,6 +220,7 @@ async def talk_with_fish_audio(file: UploadFile):
         session = active_session.get(CURRENT_PROFILE_ID)
         assessment_result = None
         similar_example = None
+        reply_text = None  # 🆕 初期化
         
         if session is None:
             # 1回目の会話
@@ -256,7 +258,14 @@ async def talk_with_fish_audio(file: UploadFile):
             session_id = session.complete_session(user_input, assessment)
             del active_session[CURRENT_PROFILE_ID]
         
-        # 会話履歴に追加
+        # 🆕 TTS生成をバックグラウンドで開始
+        if reply_text:  # 🆕 安全チェック
+            t_tts_start = time.time()
+            tts_task = asyncio.create_task(generate_tts(reply_text))
+        else:
+            raise HTTPException(500, "Reply text generation failed")
+        
+        # 会話履歴に追加（TTSと並行実行）
         conversation_entry = {
             "child": user_input,
             "medaka": reply_text,
@@ -269,23 +278,10 @@ async def talk_with_fish_audio(file: UploadFile):
         }
         conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
         
-        # 3. TTS生成
-        async with openai_client.audio.speech.with_streaming_response.create(
-            model="gpt-4o-mini-tts",
-            voice="coral",
-            instructions="""
-            Voice Affect:のんびりしていて、かわいらしい無邪気さ  
-            Tone:ほんわか、少しおっとり、親しみやすい  
-            Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
-            """,
-            speed=1.0,
-            input=reply_text,
-            response_format="mp3",
-        ) as response:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
-                async for chunk in response.iter_bytes():
-                    tts_file.write(chunk)
-                tts_path = tts_file.name
+        # TTS完了を待つ
+        tts_path = await tts_task
+        t_tts_end = time.time()
+        print(f"[TTS生成] {t_tts_end - t_tts_start:.2f}秒")
         
         end_total = time.time()
         print(f"[総処理時間] {end_total - start_total:.2f}秒")
@@ -295,6 +291,27 @@ async def talk_with_fish_audio(file: UploadFile):
     except Exception as e:
         print(f"[音声処理エラー] {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def generate_tts(text: str) -> str:
+    """TTS生成（非同期関数）"""
+    async with openai_client.audio.speech.with_streaming_response.create(
+        model="gpt-4o-mini-tts",
+        voice="coral",
+        instructions="""
+        Voice Affect:のんびりしていて、かわいらしい無邪気さ  
+        Tone:ほんわか、少しおっとり、親しみやすい  
+        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+        """,
+        speed=1.0,
+        input=text,
+        response_format="mp3",
+    ) as response:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
+            async for chunk in response.iter_bytes():
+                tts_file.write(chunk)
+            return tts_file.name
+        
 
 # データベース接続
 try:
