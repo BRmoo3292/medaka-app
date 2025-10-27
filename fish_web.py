@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, HTTPException, Request
-from fastapi.responses import FileResponse,Response
+from fastapi.responses import FileResponse,Response,StreamingResponse
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
@@ -296,7 +296,7 @@ async def talk_with_fish_audio(file: UploadFile):
 async def generate_tts(text: str) -> str:
     """TTS生成（非同期関数）"""
     async with openai_client.audio.speech.with_streaming_response.create(
-        model="tts-1",
+        model="gpt-4o-mini-tts",
         voice="coral",
         instructions="""
         Voice Affect:のんびりしていて、かわいらしい無邪気さ  
@@ -659,29 +659,27 @@ async def talk_with_fish_text(request: Request):
 
     print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
     t2 = time.time()
-    
-    async with openai_client.audio.speech.with_streaming_response.create(
-        model="gpt-4o-mini-tts",
-        voice="coral",
-        instructions="""
-        Voice Affect:のんびりしていて、かわいらしい無邪気さ  
-        Tone:ほんわか、少しおっとり、親しみやすい  
-        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
-        """,
-        speed=1.0,
-        input=reply_text,
-        response_format="mp3",
-    ) as response:
-        t3 = time.time()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
+    async def audio_stream():
+        async with openai_client.audio.speech.with_streaming_response.create(
+            model="gpt-4o-mini-tts",
+            voice="coral",
+            instructions="""
+            Voice Affect:のんびりしていて、かわいらしい無邪気さ  
+            Tone:ほんわか、少しおっとり、親しみやすい  
+            Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+            """,
+            speed=1.0,
+            input=reply_text,
+            response_format="mp3",
+        ) as response:
             async for chunk in response.iter_bytes():
-                tts_file.write(chunk)
-            tts_path = tts_file.name
-    
-    end_total = time.time()
-    print(f"[TTS生成] {t3 - t2:.2f}秒")
-    print(f"[総処理時間] {end_total - start_total:.2f}秒")
-    return FileResponse(tts_path, media_type="audio/mpeg", filename="reply.mp3")
+                yield chunk 
+        # ストリーミングレスポンスを返す
+    return StreamingResponse(
+            audio_stream(),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "inline; filename=reply.mp3"}
+        )
 
 # ✅ ブラウザから元気度を受信するエンドポイント
 @app.post("/update_health")
