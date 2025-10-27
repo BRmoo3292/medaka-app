@@ -426,12 +426,10 @@ const browserDetectionModule = {
             
             // 推論実行
             const startTime = performance.now();
-            console.log(startTime)
-            
             const results = await this.session.run({ images: inputTensor });
             const inferenceTime = performance.now() - startTime;
             
-            document.write(`[ブラウザ検出] 推論時間: ${inferenceTime.toFixed(1)}ms`);
+            console.log(`[ブラウザ検出] 推論時間: ${inferenceTime.toFixed(1)}ms`);
             
             // 結果を後処理
             const detections = this.postprocess(results);
