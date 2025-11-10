@@ -191,46 +191,85 @@ async def transcribe_audio(file: UploadFile):
 
 @app.post("/talk_with_fish_audio")
 async def talk_with_fish_audio(file: UploadFile):
-    """音声ファイルを受け取り、Whisperで文字起こし後、メダカの応答を返す"""
     start_total = time.time()
-    
+    print("\n===== [処理開始] /talk_with_fish_audio =====")
+
     try:
-        # 1. Whisperで文字起こし
+        # ------------------------------------------------------------
+        # 1. Whisper（音声認識）
+        # ------------------------------------------------------------
+        t0 = time.time()
+        print("[DEBUG] Whisper 音声認識開始")
+
         transcription_result = await transcribe_audio(file)
         user_input = transcription_result["text"]
-        
+
+        t1 = time.time()
+        print(f"[DEBUG] Whisper 音声認識終了: {t1 - t0:.3f} 秒")
+
         if not user_input.strip():
             raise HTTPException(400, "No speech detected")
-        
-        print(f"[音声認識] ユーザー入力: '{user_input}'")
-        
-        # 2. プロファイル取得
+
+        print(f"[音声認識] テキスト: '{user_input}'")
+
+        # ------------------------------------------------------------
+        # 2. プロファイル取得（DB）
+        # ------------------------------------------------------------
+        t2 = time.time()
+        print("[DEBUG] DB プロファイル取得開始")
+
         with pg_conn.cursor() as cur:
             cur.execute("SELECT * FROM profiles WHERE id = %s;", (CURRENT_PROFILE_ID,))
             profile = cur.fetchone()
-            if not profile:
-                raise HTTPException(404, "Profile not found")
-            current_stage = profile["development_stage"]
-        
-        # 会話履歴取得
+
+        if not profile:
+            raise HTTPException(404, "Profile not found")
+
+        current_stage = profile["development_stage"]
+
+        t3 = time.time()
+        print(f"[DEBUG] DB プロファイル取得終了: {t3 - t2:.3f} 秒")
+
+        # 会話履歴
         if CURRENT_PROFILE_ID not in conversation_history:
             conversation_history[CURRENT_PROFILE_ID] = []
         current_history = conversation_history[CURRENT_PROFILE_ID]
-        
+
         session = active_session.get(CURRENT_PROFILE_ID)
         assessment_result = None
         similar_example = None
         reply_text = None
-        
+
+        # ------------------------------------------------------------
+        # 3. 類似例検索 or 発達段階推定
+        # ------------------------------------------------------------
+
         if session is None:
-            # 1回目の会話
-            print("[会話フロー] 1回目の会話 - 類似例を検索")
+            print("[会話フロー] 1回目 - 類似会話検索開始")
+            t4 = time.time()
+
             similar_example = await find_similar_conversation(user_input, current_stage)
-            reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
-            
-            if (similar_example and 
-                'child_reply_1_embedding' in similar_example and 
-                similar_example['distance'] < 0.5):
+
+            t5 = time.time()
+            print(f"[DEBUG] 類似会話検索終了: {t5 - t4:.3f} 秒")
+
+            # 返信生成
+            t6 = time.time()
+            print("[DEBUG] メダカ応答生成開始")
+
+            reply_text = get_medaka_reply(
+                user_input,
+                latest_health,
+                current_history,
+                similar_example,
+                profile
+            )
+
+            t7 = time.time()
+            print(f"[DEBUG] メダカ応答生成終了: {t7 - t6:.3f} 秒")
+
+            # セッション登録
+            if similar_example and 'child_reply_1_embedding' in similar_example and similar_example['distance'] < 0.5:
                 session = ConversationSession(
                     profile_id=CURRENT_PROFILE_ID,
                     first_input=user_input,
@@ -239,9 +278,11 @@ async def talk_with_fish_audio(file: UploadFile):
                     current_stage=current_stage
                 )
                 active_session[CURRENT_PROFILE_ID] = session
+
         else:
-            # 2回目の会話 - 発達段階判定
-            print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
+            print("[会話フロー] 2回目 - 発達段階判定開始")
+            t8 = time.time()
+
             assessment = await classify_child_response(
                 user_input,
                 session.similar_example,
@@ -254,29 +295,31 @@ async def talk_with_fish_audio(file: UploadFile):
                 'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),
                 'assessed_at': datetime.now(),
             }
+
+            t9 = time.time()
+            print(f"[DEBUG] 発達段階判定終了: {t9 - t8:.3f} 秒")
+
+            # メダカ応答生成
+            t10 = time.time()
+            print("[DEBUG] メダカ応答生成開始")
+
             reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
+
+            t11 = time.time()
+            print(f"[DEBUG] メダカ応答生成終了: {t11 - t10:.3f} 秒")
+
             session_id = session.complete_session(user_input, assessment)
             del active_session[CURRENT_PROFILE_ID]
-        
+
         if not reply_text:
             raise HTTPException(500, "Reply text generation failed")
-        
-        # 会話履歴に追加
-        conversation_entry = {
-            "child": user_input,
-            "medaka": reply_text,
-            "timestamp": datetime.now(),
-            "similar_example_used": similar_example['text'] if similar_example else None,
-            "similarity_score": similar_example['distance'] if similar_example else None,
-            "has_assessment": assessment_result is not None,
-            "assessment_result": assessment_result,
-            "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
-        }
-        conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
-        
-        # TTS生成（元の方法に戻す）
-        t_tts_start = time.time()
-        
+
+        # ------------------------------------------------------------
+        # 4. TTS（音声生成）
+        # ------------------------------------------------------------
+        t12 = time.time()
+        print("[DEBUG] TTS生成開始")
+
         async with openai_client.audio.speech.with_streaming_response.create(
             model="gpt-4o-mini-tts",
             voice="coral",
@@ -293,15 +336,19 @@ async def talk_with_fish_audio(file: UploadFile):
                 async for chunk in response.iter_bytes():
                     tts_file.write(chunk)
                 tts_path = tts_file.name
-        
-        t_tts_end = time.time()
-        print(f"[TTS生成] {t_tts_end - t_tts_start:.2f}秒")
-        
+
+        t13 = time.time()
+        print(f"[DEBUG] TTS生成終了: {t13 - t12:.3f} 秒")
+
+        # ------------------------------------------------------------
+        # 5. 総処理時間
+        # ------------------------------------------------------------
         end_total = time.time()
-        print(f"[総処理時間] {end_total - start_total:.2f}秒")
-        
+        print("===== [処理終了] =====")
+        print(f"[総処理時間] {end_total - start_total:.3f} 秒\n")
+
         return FileResponse(tts_path, media_type="audio/mpeg", filename="reply.mp3")
-        
+
     except Exception as e:
         print(f"[音声処理エラー] {e}")
         raise HTTPException(status_code=500, detail=str(e))
