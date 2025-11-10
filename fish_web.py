@@ -274,43 +274,33 @@ async def talk_with_fish_audio(file: UploadFile):
         }
         conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
         
-        # 🆕 ストリーミングでTTS生成
+        # TTS生成（元の方法に戻す）
         t_tts_start = time.time()
         
-        async def audio_stream():
-            """音声データをストリーミング"""
-            chunk_count = 0
-            async with openai_client.audio.speech.with_streaming_response.create(
-                model="gpt-4o-mini-tts",
-                voice="coral",
-                instructions="""
-                Voice Affect:のんびりしていて、かわいらしい無邪気さ  
-                Tone:ほんわか、少しおっとり、親しみやすい  
-                Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
-                """,
-                speed=1.1,  # 少し速く
-                input=reply_text,
-                response_format="mp3",
-            ) as response:
+        async with openai_client.audio.speech.with_streaming_response.create(
+            model="gpt-4o-mini-tts",
+            voice="coral",
+            instructions="""
+            Voice Affect:のんびりしていて、かわいらしい無邪気さ  
+            Tone:ほんわか、少しおっとり、親しみやすい  
+            Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+            """,
+            speed=1.0,
+            input=reply_text,
+            response_format="mp3",
+        ) as response:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
                 async for chunk in response.iter_bytes():
-                    chunk_count += 1
-                    if chunk_count == 1:
-                        first_chunk_time = time.time()
-                        print(f"[TTS] 最初のチャンク到着: {first_chunk_time - t_tts_start:.2f}秒")
-                    yield chunk
+                    tts_file.write(chunk)
+                tts_path = tts_file.name
+        
+        t_tts_end = time.time()
+        print(f"[TTS生成] {t_tts_end - t_tts_start:.2f}秒")
         
         end_total = time.time()
-        print(f"[総処理時間] {end_total - start_total:.2f}秒（ストリーミング開始まで）")
+        print(f"[総処理時間] {end_total - start_total:.2f}秒")
         
-        # ストリーミングレスポンスを返す
-        return StreamingResponse(
-            audio_stream(),
-            media_type="audio/mpeg",
-            headers={
-                "Content-Disposition": "inline; filename=reply.mp3",
-                "Cache-Control": "no-cache"
-            }
-        )
+        return FileResponse(tts_path, media_type="audio/mpeg", filename="reply.mp3")
         
     except Exception as e:
         print(f"[音声処理エラー] {e}")
