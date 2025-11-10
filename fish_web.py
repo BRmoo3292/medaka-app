@@ -220,7 +220,7 @@ async def talk_with_fish_audio(file: UploadFile):
         session = active_session.get(CURRENT_PROFILE_ID)
         assessment_result = None
         similar_example = None
-        reply_text = None  # 🆕 初期化
+        reply_text = None
         
         if session is None:
             # 1回目の会話
@@ -258,14 +258,10 @@ async def talk_with_fish_audio(file: UploadFile):
             session_id = session.complete_session(user_input, assessment)
             del active_session[CURRENT_PROFILE_ID]
         
-        # 🆕 TTS生成をバックグラウンドで開始
-        if reply_text:  # 🆕 安全チェック
-            t_tts_start = time.time()
-            tts_task = asyncio.create_task(generate_tts(reply_text))
-        else:
+        if not reply_text:
             raise HTTPException(500, "Reply text generation failed")
         
-        # 会話履歴に追加（TTSと並行実行）
+        # 会話履歴に追加
         conversation_entry = {
             "child": user_input,
             "medaka": reply_text,
@@ -278,20 +274,47 @@ async def talk_with_fish_audio(file: UploadFile):
         }
         conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
         
-        # TTS完了を待つ
-        tts_path = await tts_task
-        t_tts_end = time.time()
-        print(f"[TTS生成] {t_tts_end - t_tts_start:.2f}秒")
+        # 🆕 ストリーミングでTTS生成
+        t_tts_start = time.time()
+        
+        async def audio_stream():
+            """音声データをストリーミング"""
+            chunk_count = 0
+            async with openai_client.audio.speech.with_streaming_response.create(
+                model="gpt-4o-mini-tts",
+                voice="coral",
+                instructions="""
+                Voice Affect:のんびりしていて、かわいらしい無邪気さ  
+                Tone:ほんわか、少しおっとり、親しみやすい  
+                Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+                """,
+                speed=1.1,  # 少し速く
+                input=reply_text,
+                response_format="mp3",
+            ) as response:
+                async for chunk in response.iter_bytes():
+                    chunk_count += 1
+                    if chunk_count == 1:
+                        first_chunk_time = time.time()
+                        print(f"[TTS] 最初のチャンク到着: {first_chunk_time - t_tts_start:.2f}秒")
+                    yield chunk
         
         end_total = time.time()
-        print(f"[総処理時間] {end_total - start_total:.2f}秒")
+        print(f"[総処理時間] {end_total - start_total:.2f}秒（ストリーミング開始まで）")
         
-        return FileResponse(tts_path, media_type="audio/mpeg", filename="reply.mp3")
+        # ストリーミングレスポンスを返す
+        return StreamingResponse(
+            audio_stream(),
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": "inline; filename=reply.mp3",
+                "Cache-Control": "no-cache"
+            }
+        )
         
     except Exception as e:
         print(f"[音声処理エラー] {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 async def generate_tts(text: str) -> str:
     """TTS生成（非同期関数）"""
@@ -658,7 +681,6 @@ async def talk_with_fish_text(request: Request):
         conversation_history[CURRENT_PROFILE_ID] = conversation_history[CURRENT_PROFILE_ID][-20:]
 
     print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
-
     async def audio_stream():
         async with openai_client.audio.speech.with_streaming_response.create(
             model="gpt-4o-mini-tts",
@@ -672,7 +694,7 @@ async def talk_with_fish_text(request: Request):
             input=reply_text,
             response_format="mp3",
         ) as response:
-            async for chunk in response.iter_bytes():
+            async for chunk in response.iter_bytesn ():
                 yield chunk 
 
         end_total = time.time()
