@@ -934,7 +934,7 @@ const speechModule = {
     
     // VAD設定
     SILENCE_THRESHOLD: 0.08,      // 無音判定の閾値（0.015 → 0.08）
-    SILENCE_DURATION: 1500,       // 無音が続いたら停止（ミリ秒）
+    SILENCE_DURATION: 300,       // 無音が続いたら停止（ミリ秒）
     VOICE_THRESHOLD: 0.3,        // 音声検出の閾値（0.035 → 0.10）
     MIN_RECORDING_TIME: 500,      // 最低録音時間（ミリ秒）
     recordingStartTime: null,
@@ -1149,7 +1149,7 @@ const speechModule = {
             const formData = new FormData();
             formData.append('file', audioBlob, 'recording.webm');
             
-            const response = await fetch(`${CONFIG.SERVER_URL}/talk_with_fish_audio`, {
+            const response = await fetch(`${CONFIG.SERVER_URL}/talk_with_fish_text`, {
                 method: "POST",
                 body: formData
             });
@@ -1157,6 +1157,7 @@ const speechModule = {
             if (!response.ok) {
                 throw new Error('サーバーエラー');
             }
+
             
             console.log('[サーバー送信] 応答受信完了');
             

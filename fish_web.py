@@ -156,170 +156,191 @@ async def options_onnx_model():
 
 @app.post("/transcribe_audio")
 async def transcribe_audio(file: UploadFile):
-    """Whisper APIで音声をテキストに変換"""
+    """GPT-4o-mini-transcribeで音声をテキストに変換（高速版）"""
     start = time.time()
-    
-    try:
-        audio_content = await file.read()
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_audio:
+    audio_content = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_audio:
             temp_audio.write(audio_content)
             temp_audio_path = temp_audio.name
-        
-        with open(temp_audio_path, "rb") as audio_file:
+    with open(temp_audio_path, "rb") as audio_file:
             transcript = await openai_client.audio.transcriptions.create(
-                model="whisper-1",
+                model="gpt-4o-mini-transcribe",
                 file=audio_file,
                 language="ja",
-                response_format="verbose_json"
+                response_format="text"  # 🆕 textに変更（より高速）
             )
-        
-        os.unlink(temp_audio_path)
-        
-        end = time.time()
-        print(f"[Whisper] 文字起こし完了: '{transcript.text}' ({end - start:.2f}秒)")
-        
-        return {
-            "text": transcript.text,
-            "duration": transcript.duration,
-            "language": transcript.language
+
+        # textの場合、transcriptは文字列で返ってくる
+    return {
+            "text": transcript,  # 直接文字列
+            "duration": None,
+            "language": "ja"
         }
-        
-    except Exception as e:
-        print(f"[Whisper] エラー: {e}")
-        raise HTTPException(status_code=500, detail=f"Transcription error: {str(e)}")
 
-@app.post("/talk_with_fish_audio")
-async def talk_with_fish_audio(file: UploadFile):
+@app.post("/talk_with_fish_text")
+async def talk_with_fish_text(file: UploadFile):
     start_total = time.time()
-    print("\n===== [処理開始] /talk_with_fish_audio =====")
-
-    try:
-        # ------------------------------------------------------------
-        # 1. Whisper（音声認識）
-        # ------------------------------------------------------------
-        t0 = time.time()
-        print("[DEBUG] Whisper 音声認識開始")
-
-        transcription_result = await transcribe_audio(file)
-        user_input = transcription_result["text"]
-
-        t1 = time.time()
-        print(f"[DEBUG] Whisper 音声認識終了: {t1 - t0:.3f} 秒")
-
-        if not user_input.strip():
-            raise HTTPException(400, "No speech detected")
-
-        print(f"[音声認識] テキスト: '{user_input}'")
-
-        # ------------------------------------------------------------
-        # 2. プロファイル取得（DB）
-        # ------------------------------------------------------------
-        t2 = time.time()
-        print("[DEBUG] DB プロファイル取得開始")
-
-        with pg_conn.cursor() as cur:
-            cur.execute("SELECT * FROM profiles WHERE id = %s;", (CURRENT_PROFILE_ID,))
-            profile = cur.fetchone()
-
+    time_log = {}
+    # 音声認識とプロファイル取得を並列実行
+    t1 = time.time()
+    
+    # 並列タスクを作成
+    transcription_task = asyncio.create_task(transcribe_audio(file))
+    
+    # プロファイル取得（軽い処理、並列実行可能）
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT * FROM profiles WHERE id = %s;", (CURRENT_PROFILE_ID,))
+        profile = cur.fetchone()
         if not profile:
             raise HTTPException(404, "Profile not found")
-
         current_stage = profile["development_stage"]
+    
+    # 音声認識の完了を待つ
+    transcription_result = await transcription_task
+    user_input = transcription_result["text"]
+    
+    t2 = time.time()
+    time_log['01_音声認識+プロファイル'] = t2 - t1
+    print(f"[⏱️ 音声認識+プロファイル] {time_log['01_音声認識+プロファイル']:.2f}秒")
+    
+    # ⏱️ 3. 会話履歴の初期化
+    t1 = time.time()
+    if CURRENT_PROFILE_ID not in conversation_history:
+        conversation_history[CURRENT_PROFILE_ID] = []
+    current_history = conversation_history[CURRENT_PROFILE_ID]
+    session = active_session.get(CURRENT_PROFILE_ID)
+    t2 = time.time()
+    time_log['03_履歴初期化'] = t2 - t1
+    print(f"[⏱️ 履歴初期化] {time_log['03_履歴初期化']:.2f}秒")
+    
+    assessment_result = None  
+    similar_example = None
 
-        t3 = time.time()
-        print(f"[DEBUG] DB プロファイル取得終了: {t3 - t2:.3f} 秒")
-
-        # 会話履歴
-        if CURRENT_PROFILE_ID not in conversation_history:
-            conversation_history[CURRENT_PROFILE_ID] = []
-        current_history = conversation_history[CURRENT_PROFILE_ID]
-
-        session = active_session.get(CURRENT_PROFILE_ID)
-        assessment_result = None
-        similar_example = None
-        reply_text = None
-
-        # ------------------------------------------------------------
-        # 3. 類似例検索 or 発達段階推定
-        # ------------------------------------------------------------
-
-        if session is None:
-            print("[会話フロー] 1回目 - 類似会話検索開始")
-            t4 = time.time()
-
-            similar_example = await find_similar_conversation(user_input, current_stage)
-
-            t5 = time.time()
-            print(f"[DEBUG] 類似会話検索終了: {t5 - t4:.3f} 秒")
-
-            # 返信生成
-            t6 = time.time()
-            print("[DEBUG] メダカ応答生成開始")
-
-            reply_text = get_medaka_reply(
-                user_input,
-                latest_health,
-                current_history,
-                similar_example,
-                profile
-            )
-
-            t7 = time.time()
-            print(f"[DEBUG] メダカ応答生成終了: {t7 - t6:.3f} 秒")
-
-            # セッション登録
-            if similar_example and 'child_reply_1_embedding' in similar_example and similar_example['distance'] < 0.5:
-                session = ConversationSession(
+    if session is None:
+        print("[会話フロー] 1回目の会話 - 類似例を検索")
+        
+        # ⏱️ 4. ベクトル検索
+        t1 = time.time()
+        similar_example = await find_similar_conversation(user_input, current_stage)
+        t2 = time.time()
+        time_log['04_ベクトル検索'] = t2 - t1
+        print(f"[⏱️ ベクトル検索] {time_log['04_ベクトル検索']:.2f}秒")
+        
+        # ⏱️ 5. メダカ応答生成
+        t1 = time.time()
+        reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
+        t2 = time.time()
+        time_log['05_応答生成'] = t2 - t1
+        print(f"[⏱️ 応答生成] {time_log['05_応答生成']:.2f}秒")
+        
+        # ⏱️ 6. セッション作成
+        t1 = time.time()
+        if (similar_example and 
+            'child_reply_1_embedding' in similar_example and 
+            similar_example['distance'] < 0.5):
+            session = ConversationSession(
                     profile_id=CURRENT_PROFILE_ID,
                     first_input=user_input,
                     medaka_response=reply_text,
                     similar_example=similar_example,
                     current_stage=current_stage
-                )
-                active_session[CURRENT_PROFILE_ID] = session
-
-        else:
-            print("[会話フロー] 2回目 - 発達段階判定開始")
-            t8 = time.time()
-
-            assessment = await classify_child_response(
-                user_input,
-                session.similar_example,
-                openai_client,
             )
-            assessment_result = {
-                'result': assessment[0],
-                'maintain_score': round(float(assessment[1]), 3),
-                'upgrade_score': round(float(assessment[2]), 3),
-                'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),
-                'assessed_at': datetime.now(),
-            }
+            active_session[CURRENT_PROFILE_ID] = session
+            print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
+        else:
+            print(f"[セッション] 類似度が低い - 通常の会話として処理")
+        t2 = time.time()
+        time_log['06_セッション作成'] = t2 - t1
+        print(f"[⏱️ セッション作成] {time_log['06_セッション作成']:.2f}秒")
+        
+    else:
+        print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
+        
+        # ⏱️ 4. 発達段階判定
+        t1 = time.time()
+        assessment = await classify_child_response(
+            user_input,
+            session.similar_example,
+            openai_client,
+        )
+        t2 = time.time()
+        time_log['04_発達段階判定'] = t2 - t1
+        print(f"[⏱️ 発達段階判定] {time_log['04_発達段階判定']:.2f}秒")
+        
+        # ⏱️ 5. 判定結果処理
+        t1 = time.time()
+        assessment_result = {
+            'result': assessment[0],
+            'maintain_score': round(float(assessment[1]), 3),
+            'upgrade_score': round(float(assessment[2]), 3),
+            'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),
+            'assessed_at': datetime.now(),
+        }
+        
+        if assessment[0] == "昇格":
+            new_stage = upgrade_development_stage(CURRENT_PROFILE_ID, current_stage)
+            profile["development_stage"] = new_stage
+            
+            if new_stage != current_stage:
+                assessment_result['stage_upgraded'] = True
+                assessment_result['previous_stage'] = current_stage
+                assessment_result['new_stage'] = new_stage
+                print(f"[会話フロー] 🎉 発達段階が昇格しました！ {current_stage} → {new_stage}")
+            else:
+                assessment_result['stage_upgraded'] = False
+                assessment_result['already_max'] = True
+                print(f"[会話フロー] すでに最高段階 {current_stage} に到達しています")
+        else:
+            assessment_result['stage_upgraded'] = False
+            print(f"[会話フロー] 現状維持 - {current_stage} のまま")
+        t2 = time.time()
+        time_log['05_判定結果処理'] = t2 - t1
+        print(f"[⏱️ 判定結果処理] {time_log['05_判定結果処理']:.2f}秒")
+        
+        # ⏱️ 6. メダカ応答生成
+        t1 = time.time()
+        reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
+        t2 = time.time()
+        time_log['06_応答生成'] = t2 - t1
+        print(f"[⏱️ 応答生成] {time_log['06_応答生成']:.2f}秒")
+        
+        # ⏱️ 7. セッション完了処理
+        t1 = time.time()
+        session_id = session.complete_session(user_input, assessment)
+        del active_session[CURRENT_PROFILE_ID]
+        print(f"[セッション] 判定完了 - セッションID: {session_id}")
+        t2 = time.time()
+        time_log['07_セッション完了'] = t2 - t1
+        print(f"[⏱️ セッション完了] {time_log['07_セッション完了']:.2f}秒")
 
-            t9 = time.time()
-            print(f"[DEBUG] 発達段階判定終了: {t9 - t8:.3f} 秒")
+    # ⏱️ 8. 会話履歴保存
+    t1 = time.time()
+    conversation_entry = {
+            "child": user_input,
+            "medaka": reply_text,
+            "timestamp": datetime.now(),
+            "similar_example_used": similar_example['text'] if similar_example else None,
+            "similarity_score": similar_example['distance'] if similar_example else None,
+            "has_assessment": assessment_result is not None,
+            "assessment_result": assessment_result,
+            "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
+    }
+    conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
+    if len(conversation_history[CURRENT_PROFILE_ID]) > 20:
+        conversation_history[CURRENT_PROFILE_ID] = conversation_history[CURRENT_PROFILE_ID][-20:]
 
-            # メダカ応答生成
-            t10 = time.time()
-            print("[DEBUG] メダカ応答生成開始")
-
-            reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
-
-            t11 = time.time()
-            print(f"[DEBUG] メダカ応答生成終了: {t11 - t10:.3f} 秒")
-
-            session_id = session.complete_session(user_input, assessment)
-            del active_session[CURRENT_PROFILE_ID]
-
-        if not reply_text:
-            raise HTTPException(500, "Reply text generation failed")
-
-        # ------------------------------------------------------------
-        # 4. TTS（音声生成）
-        # ------------------------------------------------------------
-        t12 = time.time()
-        print("[DEBUG] TTS生成開始")
-
+    print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
+    t2 = time.time()
+    time_log['08_履歴保存'] = t2 - t1
+    print(f"[⏱️ 履歴保存] {time_log['08_履歴保存']:.2f}秒")
+    
+    # ⏱️ 9. TTS準備（ストリーミング開始まで）
+    t_stream_start = time.time()
+    
+    async def audio_stream():
+        chunk_count = 0
+        t_first_chunk = None
+        
         async with openai_client.audio.speech.with_streaming_response.create(
             model="gpt-4o-mini-tts",
             voice="coral",
@@ -332,26 +353,41 @@ async def talk_with_fish_audio(file: UploadFile):
             input=reply_text,
             response_format="mp3",
         ) as response:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tts_file:
-                async for chunk in response.iter_bytes():
-                    tts_file.write(chunk)
-                tts_path = tts_file.name
-
-        t13 = time.time()
-        print(f"[DEBUG] TTS生成終了: {t13 - t12:.3f} 秒")
-
-        # ------------------------------------------------------------
-        # 5. 総処理時間
-        # ------------------------------------------------------------
-        end_total = time.time()
-        print("===== [処理終了] =====")
-        print(f"[総処理時間] {end_total - start_total:.3f} 秒\n")
-
-        return FileResponse(tts_path, media_type="audio/mpeg", filename="reply.mp3")
-
-    except Exception as e:
-        print(f"[音声処理エラー] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            async for chunk in response.iter_bytes():
+                chunk_count += 1
+                if chunk_count == 1:
+                    # 最初のチャンクが届いた時間
+                    t_first_chunk = time.time()
+                    first_chunk_time = t_first_chunk - t_stream_start
+                    print(f"[⏱️ TTS最初のチャンク] {first_chunk_time:.2f}秒")
+                yield chunk
+    
+    # ⏱️ 総処理時間の計算と表示
+    end_total = time.time()
+    total_time = end_total - start_total
+    
+    print("\n" + "="*50)
+    print("⏱️  処理時間の詳細")
+    print("="*50)
+    
+    # 各処理の時間を表示
+    for key in sorted(time_log.keys()):
+        duration = time_log[key]
+        percentage = (duration / total_time) * 100
+        bar_length = int(percentage / 2)  # 2%につき1文字
+        bar = "█" * bar_length + "░" * (50 - bar_length)
+        print(f"{key:20} │ {bar} │ {duration:6.2f}秒 ({percentage:5.1f}%)")
+    
+    print("-" * 50)
+    print(f"{'合計（ストリーミング開始まで）':20} │ {total_time:6.2f}秒 (100.0%)")
+    print("="*50 + "\n")
+    
+    # ストリーミングレスポンスを返す
+    return StreamingResponse(
+            audio_stream(),
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "inline; filename=reply.mp3"}
+        )
 
 async def generate_tts(text: str) -> str:
     """TTS生成（非同期関数）"""
@@ -412,23 +448,28 @@ async def find_similar_conversation(user_input: str, development_stage: str):
             print(f"[類似検索] {development_stage}に該当する例が見つかりませんでした")
             return None
 
-def get_medaka_reply(user_input, healt_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
+def get_medaka_reply(user_input, health_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
     start = time.time()
-    if healt_status == "Active":
+    
+    if health_status == "Active":
         medaka_state = "元気"
-    elif healt_status == "Normal":
+    elif health_status == "Normal":
         medaka_state = "休憩中"
-    elif healt_status == "Lethargic":
+    elif health_status == "Lethargic":
         medaka_state = "元気ない"
     else:
         medaka_state = "休憩中"
+    
     print("メダカの状態:", medaka_state)
     
+    # プロファイル情報の取得
     if profile_info:
         profile_name = profile_info.get('name', 'Unknown')
         age_text = f"{profile_info['age']}歳" if profile_info.get('age') else "年齢不明"
         stage_text = profile_info.get('development_stage', '不明')
         profile_context = f"話し相手: {profile_name}さん ({age_text}, {stage_text})\n"
+        
+        # 会話履歴
         history_context = ""
         if conversation_hist and len(conversation_hist) > 0:
             recent_history = conversation_hist[-3:]
@@ -436,48 +477,94 @@ def get_medaka_reply(user_input, healt_status="不明", conversation_hist=None, 
             for i, h in enumerate(recent_history, 1):
                 history_context += f"{i}. 児童「{h['child']}」→ メダカ「{h['medaka']}」\n"
         history_context += "\n"
-       
+        
+        # 🆕 自己表現レベルの取得
+        stage = profile_info.get('development_stage', 'stage_1')
+        
+        # stage から数値を抽出
+        if stage == 'stage_1':
+            child_expression_level = 1
+        elif stage == 'stage_2':
+            child_expression_level = 2
+        elif stage == 'stage_3':
+            child_expression_level = 3
+        else:
+            child_expression_level = 1  # デフォルト
+    else:
+        profile_context = ""
+        history_context = ""
+        child_expression_level = 1  # デフォルト
+    
+    # 🆕 自己表現レベルに応じた応答戦略
+    if child_expression_level == 1:
+        response_strategy = """
+【応答戦略】
+児童の発話が「抽象的」か「具体的」かを判断し、使い分けてください。
+- **発話が抽象的な場合**: 必ず2択や「どっち？」で答えを引き出すか、児童の単語に追加の言葉をつけて誘導する。
+- **発話が具体的な場合**: 児童の単語を短文に直して返す。または、発話をそのまま肯定しつつ、感情表現や語彙を少し増やす（例：「きれい」→「きれいだね〜！ピカピカしててうれしいね」）。
+"""
+    elif child_expression_level == 2:
+        response_strategy = """
+【応答戦略】
+児童の発話タイプに合わせて対応を変えてください。
+- **単語や短いフレーズどまり**: 短い返答を繰り返しながら、「どうして？」「どんな？」「他には？」と質問を足す。または興味に沿って「もっと詳しく教えて」と掘り下げる。
+- **話が単発的で順序がない**: 「まずは？」「次は？」など、理由づけや順序立てを促す。
+- **語彙や文法が不自然で、文脈がズレている**: 少しズレた説明や一方的な話でも否定せずに聞き役になる。
+"""
+    else:
+        # stage_3 またはデフォルト
+        response_strategy = ""
+    
+    # プロンプトの構築
     if similar_example:
         prompt = f"""
-                あなたは水槽に住むかわいいメダカ「キンちゃん」です。
-                メダカの状態: {medaka_state}
-                {profile_context}
-                以下の例を参考に、全く同じ言葉で応答してください。
-                【会話】
-                児童:「{similar_example['text']}」
-                メダカ:「{similar_example['fish_text']}」
+あなたは水槽に住むかわいいメダカ「キンちゃん」です。
+メダカの状態: {medaka_state}
+{profile_context}
+以下の例を参考に、全く同じ言葉で応答してください。
+【会話】
+児童:「{similar_example['text']}」
+メダカ:「{similar_example['fish_text']}」
 
-                {history_context}【現在の会話】
-                児童:「{user_input}」
-                メダカ:
-                """
+{history_context}【現在の会話】
+児童:「{user_input}」
+メダカ:
+"""
     else:
+        # 類似例がない場合、戦略を組み込んだプロンプトを使用
         prompt = f"""
-        あなたは水槽に住むかわいいメダカ「キンちゃん」です。
-        {profile_context}{history_context}
-        児童:「{user_input}」
+あなたは水槽に住むかわいいメダカ「キンちゃん」です。
+{profile_context}
 
-        30文字以内で、優しく小学生らしい口調で答えてください。
-        メダカの状態: {medaka_state}
+{response_strategy}
 
-        キンちゃん:"""
+{history_context}児童:「{user_input}」
 
-    print(f"[応答生成] プロンプト作成完了", prompt)
+上記の【応答戦略】に基づき、30文字以内で、優しく小学生らしい口調で答えてください。
+メダカの状態: {medaka_state}
+
+キンちゃん:"""
+    
+    print(f"[応答生成] プロンプト作成完了\n{prompt}")
+    
+    # Gemini設定
     generation_config = genai.types.GenerationConfig(
         temperature=0.5,
         top_p=0.1,
         top_k=1
     )
+    
     response = model_gemini.generate_content(
         prompt,
         generation_config=generation_config
     )
+    
     end = time.time()
-
     reply = response.text.strip()
-
+    
     print(f"[Gemini応答生成] 所要時間: {end - start:.2f}秒")
     print(f"[応答生成] 生成された応答: '{reply}'")
+    
     return reply
 
 class ConversationSession:
@@ -623,125 +710,6 @@ async def classify_child_response(
     
     return result, maintain_similarity, upgrade_similarity
 
-@app.post("/talk_with_fish_text")
-async def talk_with_fish_text(request: Request):
-    start_total = time.time()
-    data = await request.json()
-    user_input = data.get("user_input", "")
-    if not user_input.strip():
-        raise HTTPException(400, "user_input is required")
-    
-    with pg_conn.cursor() as cur:
-        cur.execute("SELECT * FROM profiles WHERE id = %s;", (CURRENT_PROFILE_ID,))
-        profile = cur.fetchone()
-        if not profile:
-            raise HTTPException(404, "Profile not found")
-        current_stage = profile["development_stage"]
-    
-    if CURRENT_PROFILE_ID not in conversation_history:
-        conversation_history[CURRENT_PROFILE_ID] = []
-    current_history = conversation_history[CURRENT_PROFILE_ID]
-    session = active_session.get(CURRENT_PROFILE_ID)
-    assessment_result = None  
-    similar_example = None
-
-    if session is None:
-        print("[会話フロー] 1回目の会話 - 類似例を検索")
-        similar_example = await find_similar_conversation(user_input, current_stage)
-        reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
-        
-        if (similar_example and 
-            'child_reply_1_embedding' in similar_example and 
-            similar_example['distance'] < 0.5):
-            session = ConversationSession(
-                    profile_id=CURRENT_PROFILE_ID,
-                    first_input=user_input,
-                    medaka_response=reply_text,
-                    similar_example=similar_example,
-                    current_stage=current_stage
-            )
-            active_session[CURRENT_PROFILE_ID] = session
-            print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
-        else:
-            print(f"[セッション] 類似度が低い - 通常の会話として処理")
-    else:
-        print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
-        
-        assessment = await classify_child_response(
-            user_input,
-            session.similar_example,
-            openai_client,
-        )
-        
-        assessment_result = {
-            'result': assessment[0],
-            'maintain_score': round(float(assessment[1]), 3),
-            'upgrade_score': round(float(assessment[2]), 3),
-            'confidence_score': round(float(abs(assessment[2] - assessment[1])), 5),
-            'assessed_at': datetime.now(),
-        }
-        
-        if assessment[0] == "昇格":
-            new_stage = upgrade_development_stage(CURRENT_PROFILE_ID, current_stage)
-            profile["development_stage"] = new_stage
-            
-            if new_stage != current_stage:
-                assessment_result['stage_upgraded'] = True
-                assessment_result['previous_stage'] = current_stage
-                assessment_result['new_stage'] = new_stage
-                print(f"[会話フロー] 🎉 発達段階が昇格しました！ {current_stage} → {new_stage}")
-            else:
-                assessment_result['stage_upgraded'] = False
-                assessment_result['already_max'] = True
-                print(f"[会話フロー] すでに最高段階 {current_stage} に到達しています")
-        else:
-            assessment_result['stage_upgraded'] = False
-            print(f"[会話フロー] 現状維持 - {current_stage} のまま")
-        
-        reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
-        session_id = session.complete_session(user_input, assessment)
-        del active_session[CURRENT_PROFILE_ID]
-        print(f"[セッション] 判定完了 - セッションID: {session_id}")
-
-    conversation_entry = {
-            "child": user_input,
-            "medaka": reply_text,
-            "timestamp": datetime.now(),
-            "similar_example_used": similar_example['text'] if similar_example else None,
-            "similarity_score": similar_example['distance'] if similar_example else None,
-            "has_assessment": assessment_result is not None,
-            "assessment_result": assessment_result,
-            "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
-    }
-    conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
-    if len(conversation_history[CURRENT_PROFILE_ID]) > 20:
-        conversation_history[CURRENT_PROFILE_ID] = conversation_history[CURRENT_PROFILE_ID][-20:]
-
-    print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
-    async def audio_stream():
-        async with openai_client.audio.speech.with_streaming_response.create(
-            model="gpt-4o-mini-tts",
-            voice="coral",
-            instructions="""
-            Voice Affect:のんびりしていて、かわいらしい無邪気さ  
-            Tone:ほんわか、少しおっとり、親しみやすい  
-            Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
-            """,
-            speed=1.0,
-            input=reply_text,
-            response_format="mp3",
-        ) as response:
-            async for chunk in response.iter_bytesn ():
-                yield chunk 
-
-        end_total = time.time()
-        print(f"[総処理時間] {end_total - start_total:.2f}秒（ストリーミング開始まで）")
-        # ストリーミングレスポンスを返す
-    return StreamingResponse(
-            audio_stream(),
-            media_type="audio/mpeg",
-            headers={"Content-Disposition": "inline; filename=reply.mp3"}
-        )
 
 # ✅ ブラウザから元気度を受信するエンドポイント
 @app.post("/update_health")
