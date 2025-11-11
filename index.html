@@ -934,8 +934,8 @@ const speechModule = {
     
     // VAD設定
     SILENCE_THRESHOLD: 0.08,      // 無音判定の閾値（0.015 → 0.08）
-    SILENCE_DURATION: 300,       // 無音が続いたら停止（ミリ秒）
-    VOICE_THRESHOLD: 0.3,        // 音声検出の閾値（0.035 → 0.10）
+    SILENCE_DURATION: 800,       // 無音が続いたら停止（ミリ秒）
+    VOICE_THRESHOLD: 0.15,        // 音声検出の閾値（0.035 → 0.10）
     MIN_RECORDING_TIME: 500,      // 最低録音時間（ミリ秒）
     recordingStartTime: null,
 
@@ -1141,39 +1141,53 @@ const speechModule = {
         console.log('[VAD] 音声検出停止');
     },
 
-    async sendAudioToServer(audioBlob) {
-        try {
-            elements.statusDiv.textContent = "🔄 音声を認識しています...";
-            console.log('[サーバー送信] 音声データ送信中...');
+async sendAudioToServer(audioBlob) {
+    const t_start = performance.now();
+    console.log('[⏱️ クライアント] リクエスト開始');
+    
+    try {
+        elements.statusDiv.textContent = "🔄 音声を認識しています...";
+        
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'recording.webm');
+        
+        const t_request_start = performance.now();
+        const response = await fetch(`${CONFIG.SERVER_URL}/talk_with_fish_audio`, {
+            method: "POST",
+            body: formData
+        });
+        const t_request_end = performance.now();
+        console.log(`[⏱️ クライアント] サーバー応答受信: ${((t_request_end - t_request_start) / 1000).toFixed(2)}秒`);
+        
+        if (!response.ok) {
+            throw new Error('サーバーエラー');
+        }
+        
+        const t_blob_start = performance.now();
+        const audioResponseBlob = await response.blob();
+        const t_blob_end = performance.now();
+        console.log(`[⏱️ クライアント] データ受信完了: ${((t_blob_end - t_blob_start) / 1000).toFixed(2)}秒`);
+        console.log(`[⏱️ クライアント] データサイズ: ${(audioResponseBlob.size / 1024).toFixed(2)}KB`);
+        
+        const audioUrl = URL.createObjectURL(audioResponseBlob);
+        
+        elements.statusDiv.textContent = "🐟 メダカが話しています...";
+        
+        const t_play_start = performance.now();
+        elements.replyAudio.src = audioUrl;
+        
+        elements.replyAudio.onloadeddata = () => {
+            const t_loaded = performance.now();
+            console.log(`[⏱️ クライアント] 音声データ読み込み完了: ${((t_loaded - t_play_start) / 1000).toFixed(2)}秒`);
+        };
+        
+        elements.replyAudio.onplay = () => {
+            const t_play = performance.now();
+            console.log(`[⏱️ クライアント] 再生開始: ${((t_play - t_play_start) / 1000).toFixed(2)}秒`);
             
-            const formData = new FormData();
-            formData.append('file', audioBlob, 'recording.webm');
-            
-            const response = await fetch(`${CONFIG.SERVER_URL}/talk_with_fish_text`, {
-                method: "POST",
-                body: formData
-            });
-            
-            if (!response.ok) {
-                throw new Error('サーバーエラー');
-            }
-
-            
-            console.log('[サーバー送信] 応答受信完了');
-            
-            const audioResponseBlob = await response.blob();
-            const audioUrl = URL.createObjectURL(audioResponseBlob);
-            
-            // 🐟 メダカの音声再生開始
-            elements.statusDiv.textContent = "🐟 メダカが話しています...";
-            console.log('[メダカ応答] 音声再生開始');
-            
-            elements.replyAudio.src = audioUrl;
-            
-            // 再生が始まったことを確実に検知
-            elements.replyAudio.onloadeddata = () => {
-                console.log('[メダカ応答] 音声データ読み込み完了');
-            };
+            const t_total = (t_play - t_start) / 1000;
+            console.log(`[⏱️ クライアント] 🎯 総合時間（録音停止→再生開始）: ${t_total.toFixed(2)}秒`);
+        };
             
             await elements.replyAudio.play();
             console.log('[メダカ応答] play()実行完了');
