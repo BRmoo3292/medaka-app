@@ -183,7 +183,6 @@ async def talk_with_fish_text(file: UploadFile):
     time_log = {}
     # 音声認識とプロファイル取得を並列実行
     t1 = time.time()
-    
     # 並列タスクを作成
     transcription_task = asyncio.create_task(transcribe_audio(file))
     
@@ -521,7 +520,7 @@ def get_medaka_reply(user_input, health_status="不明", conversation_hist=None,
 あなたは水槽に住むかわいいメダカ「キンちゃん」です。
 メダカの状態: {medaka_state}
 {profile_context}
-以下の例を参考に、全く同じ言葉で応答してください。
+以下の例と全く同じ言葉で30字程度で応答してください。
 【会話】
 児童:「{similar_example['text']}」
 メダカ:「{similar_example['fish_text']}」
@@ -549,7 +548,7 @@ def get_medaka_reply(user_input, health_status="不明", conversation_hist=None,
     
     # Gemini設定
     generation_config = genai.types.GenerationConfig(
-        temperature=0.5,
+        temperature=1,
         top_p=0.1,
         top_k=1
     )
