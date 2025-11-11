@@ -24,7 +24,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
-model_gemini = genai.GenerativeModel(model_name="gemini-2.5-flash")
+model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
 
 print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
 print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
