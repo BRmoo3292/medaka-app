@@ -20,21 +20,11 @@ pg_conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 pg_conn.autocommit = True
 print(f"[起動時] DB接続成功: {DB_URL}")
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]  
-)
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
-model_gemini = genai.GenerativeModel(model_name="gemini-2.5-flash-lite")
+model_gemini = genai.GenerativeModel(model_name="gemini-2.5-flash")
 
 print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
 print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
@@ -45,6 +35,15 @@ active_session = {}
 conversation_history = defaultdict(lambda: deque(maxlen=10))
 latest_health = "Normal"
 CURRENT_PROFILE_ID = 1
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]  
+)
 
 # Session Pooler対応のデータベース接続関数
 def connect_to_database(db_url, max_retries=3):
@@ -115,7 +114,31 @@ def connect_to_database(db_url, max_retries=3):
             print(f"❌ 予期しないエラー: {e}")
             break
     
-    return None
+    return None  
+# データベース接続
+try:
+    pg_conn = connect_to_database(DB_URL)
+    if not pg_conn:
+        print("❌ データベース接続を確立できませんでした")
+        exit(1)
+except Exception as e:
+    print(f"❌ DB接続エラー: {e}")
+    exit(1)
+
+async def get_profile_async(profile_id: int):
+    """非同期プロファイル取得"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, get_profile_sync, profile_id)
+
+def get_profile_sync(profile_id: int):
+    """同期的にプロファイルを取得"""
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT * FROM profiles WHERE id = %s;", (profile_id,))
+        profile = cur.fetchone()
+        if not profile:
+            raise HTTPException(404, "Profile not found")
+        return profile
+
 
 @app.get("/best.onnx")
 async def serve_onnx_model():
@@ -181,36 +204,36 @@ async def transcribe_audio(file: UploadFile):
 async def talk_with_fish_text(file: UploadFile):
     start_total = time.time()
     time_log = {}
-    # 音声認識とプロファイル取得を並列実行
+    
+    # ⏱️ 1. 音声認識とプロファイル取得を完全並列実行
     t1 = time.time()
-    # 並列タスクを作成
-    transcription_task = asyncio.create_task(transcribe_audio(file))
     
-    # プロファイル取得（軽い処理、並列実行可能）
-    with pg_conn.cursor() as cur:
-        cur.execute("SELECT * FROM profiles WHERE id = %s;", (CURRENT_PROFILE_ID,))
-        profile = cur.fetchone()
-        if not profile:
-            raise HTTPException(404, "Profile not found")
-        current_stage = profile["development_stage"]
+    # 🔥 並列タスクを作成
+    transcription_task = transcribe_audio(file)
+    profile_task = get_profile_async(CURRENT_PROFILE_ID)
     
-    # 音声認識の完了を待つ
-    transcription_result = await transcription_task
+    # 両方の完了を待つ
+    transcription_result, profile = await asyncio.gather(
+        transcription_task,
+        profile_task
+    )
+    
     user_input = transcription_result["text"]
+    current_stage = profile["development_stage"]
     
     t2 = time.time()
     time_log['01_音声認識+プロファイル'] = t2 - t1
-    print(f"[⏱️ 音声認識+プロファイル] {time_log['01_音声認識+プロファイル']:.2f}秒")
+    print(f"[⏱️ 音声認識+プロファイル（並列）] {time_log['01_音声認識+プロファイル']:.2f}秒")
     
-    # ⏱️ 3. 会話履歴の初期化
+    # ⏱️ 2. 会話履歴の初期化
     t1 = time.time()
     if CURRENT_PROFILE_ID not in conversation_history:
         conversation_history[CURRENT_PROFILE_ID] = []
     current_history = conversation_history[CURRENT_PROFILE_ID]
     session = active_session.get(CURRENT_PROFILE_ID)
     t2 = time.time()
-    time_log['03_履歴初期化'] = t2 - t1
-    print(f"[⏱️ 履歴初期化] {time_log['03_履歴初期化']:.2f}秒")
+    time_log['02_履歴初期化'] = t2 - t1
+    print(f"[⏱️ 履歴初期化] {time_log['02_履歴初期化']:.2f}秒")
     
     assessment_result = None  
     similar_example = None
@@ -218,21 +241,21 @@ async def talk_with_fish_text(file: UploadFile):
     if session is None:
         print("[会話フロー] 1回目の会話 - 類似例を検索")
         
-        # ⏱️ 4. ベクトル検索
+        # ⏱️ 3. ベクトル検索
         t1 = time.time()
         similar_example = await find_similar_conversation(user_input, current_stage)
         t2 = time.time()
-        time_log['04_ベクトル検索'] = t2 - t1
-        print(f"[⏱️ ベクトル検索] {time_log['04_ベクトル検索']:.2f}秒")
+        time_log['03_ベクトル検索'] = t2 - t1
+        print(f"[⏱️ ベクトル検索] {time_log['03_ベクトル検索']:.2f}秒")
         
-        # ⏱️ 5. メダカ応答生成
+        # ⏱️ 4. メダカ応答生成
         t1 = time.time()
         reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
         t2 = time.time()
-        time_log['05_応答生成'] = t2 - t1
-        print(f"[⏱️ 応答生成] {time_log['05_応答生成']:.2f}秒")
+        time_log['04_応答生成'] = t2 - t1
+        print(f"[⏱️ 応答生成] {time_log['04_応答生成']:.2f}秒")
         
-        # ⏱️ 6. セッション作成
+        # ⏱️ 5. セッション作成
         t1 = time.time()
         if (similar_example and 
             'child_reply_1_embedding' in similar_example and 
@@ -249,13 +272,13 @@ async def talk_with_fish_text(file: UploadFile):
         else:
             print(f"[セッション] 類似度が低い - 通常の会話として処理")
         t2 = time.time()
-        time_log['06_セッション作成'] = t2 - t1
-        print(f"[⏱️ セッション作成] {time_log['06_セッション作成']:.2f}秒")
+        time_log['05_セッション作成'] = t2 - t1
+        print(f"[⏱️ セッション作成] {time_log['05_セッション作成']:.2f}秒")
         
     else:
         print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
         
-        # ⏱️ 4. 発達段階判定
+        # ⏱️ 3. 発達段階判定
         t1 = time.time()
         assessment = await classify_child_response(
             user_input,
@@ -263,10 +286,10 @@ async def talk_with_fish_text(file: UploadFile):
             openai_client,
         )
         t2 = time.time()
-        time_log['04_発達段階判定'] = t2 - t1
-        print(f"[⏱️ 発達段階判定] {time_log['04_発達段階判定']:.2f}秒")
+        time_log['03_発達段階判定'] = t2 - t1
+        print(f"[⏱️ 発達段階判定] {time_log['03_発達段階判定']:.2f}秒")
         
-        # ⏱️ 5. 判定結果処理
+        # ⏱️ 4. 判定結果処理
         t1 = time.time()
         assessment_result = {
             'result': assessment[0],
@@ -293,26 +316,26 @@ async def talk_with_fish_text(file: UploadFile):
             assessment_result['stage_upgraded'] = False
             print(f"[会話フロー] 現状維持 - {current_stage} のまま")
         t2 = time.time()
-        time_log['05_判定結果処理'] = t2 - t1
-        print(f"[⏱️ 判定結果処理] {time_log['05_判定結果処理']:.2f}秒")
+        time_log['04_判定結果処理'] = t2 - t1
+        print(f"[⏱️ 判定結果処理] {time_log['04_判定結果処理']:.2f}秒")
         
-        # ⏱️ 6. メダカ応答生成
+        # ⏱️ 5. メダカ応答生成
         t1 = time.time()
         reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
         t2 = time.time()
-        time_log['06_応答生成'] = t2 - t1
-        print(f"[⏱️ 応答生成] {time_log['06_応答生成']:.2f}秒")
+        time_log['05_応答生成'] = t2 - t1
+        print(f"[⏱️ 応答生成] {time_log['05_応答生成']:.2f}秒")
         
-        # ⏱️ 7. セッション完了処理
+        # ⏱️ 6. セッション完了処理
         t1 = time.time()
         session_id = session.complete_session(user_input, assessment)
         del active_session[CURRENT_PROFILE_ID]
         print(f"[セッション] 判定完了 - セッションID: {session_id}")
         t2 = time.time()
-        time_log['07_セッション完了'] = t2 - t1
-        print(f"[⏱️ セッション完了] {time_log['07_セッション完了']:.2f}秒")
+        time_log['06_セッション完了'] = t2 - t1
+        print(f"[⏱️ セッション完了] {time_log['06_セッション完了']:.2f}秒")
 
-    # ⏱️ 8. 会話履歴保存
+    # ⏱️ 7. 会話履歴保存
     t1 = time.time()
     conversation_entry = {
             "child": user_input,
@@ -330,10 +353,10 @@ async def talk_with_fish_text(file: UploadFile):
 
     print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
     t2 = time.time()
-    time_log['08_履歴保存'] = t2 - t1
-    print(f"[⏱️ 履歴保存] {time_log['08_履歴保存']:.2f}秒")
+    time_log['07_履歴保存'] = t2 - t1
+    print(f"[⏱️ 履歴保存] {time_log['07_履歴保存']:.2f}秒")
     
-    # ⏱️ 9. TTS準備（ストリーミング開始まで）
+    # ⏱️ 8. TTS準備（ストリーミング開始まで）
     t_stream_start = time.time()
     
     async def audio_stream():
@@ -355,7 +378,6 @@ async def talk_with_fish_text(file: UploadFile):
             async for chunk in response.iter_bytes():
                 chunk_count += 1
                 if chunk_count == 1:
-                    # 最初のチャンクが届いた時間
                     t_first_chunk = time.time()
                     first_chunk_time = t_first_chunk - t_stream_start
                     print(f"[⏱️ TTS最初のチャンク] {first_chunk_time:.2f}秒")
@@ -369,11 +391,10 @@ async def talk_with_fish_text(file: UploadFile):
     print("⏱️  処理時間の詳細")
     print("="*50)
     
-    # 各処理の時間を表示
     for key in sorted(time_log.keys()):
         duration = time_log[key]
         percentage = (duration / total_time) * 100
-        bar_length = int(percentage / 2)  # 2%につき1文字
+        bar_length = int(percentage / 2)
         bar = "█" * bar_length + "░" * (50 - bar_length)
         print(f"{key:20} │ {bar} │ {duration:6.2f}秒 ({percentage:5.1f}%)")
     
@@ -381,7 +402,6 @@ async def talk_with_fish_text(file: UploadFile):
     print(f"{'合計（ストリーミング開始まで）':20} │ {total_time:6.2f}秒 (100.0%)")
     print("="*50 + "\n")
     
-    # ストリーミングレスポンスを返す
     return StreamingResponse(
             audio_stream(),
             media_type="audio/mpeg",
@@ -406,46 +426,74 @@ async def generate_tts(text: str) -> str:
             async for chunk in response.iter_bytes():
                 tts_file.write(chunk)
             return tts_file.name
-        
 
-# データベース接続
-try:
-    pg_conn = connect_to_database(DB_URL)
-    if not pg_conn:
-        print("❌ データベース接続を確立できませんでした")
-        exit(1)
-except Exception as e:
-    print(f"❌ DB接続エラー: {e}")
-    exit(1)
 
 # ベクトル検索の関数
 async def find_similar_conversation(user_input: str, development_stage: str):
+    """最適化されたベクトル検索（並列化 + インデックス活用）"""
+    t_start = time.time()
+    
     print(f"[ベクトル化] ユーザー入力: {user_input}")
+    
+    # 🔥 エンベッディング生成
+    t_embed_start = time.time()
     resp = await openai_client.embeddings.create(
         input=[user_input],
         model="text-embedding-ada-002"
     )
     query_vector = resp.data[0].embedding
-    print(f"[ベクトル化]完了:(次元: {len(query_vector)})")
+    t_embed_end = time.time()
+    print(f"[ベクトル化] 完了: {t_embed_end - t_embed_start:.3f}秒 (次元: {len(query_vector)})")
     
-    with pg_conn.cursor() as cur:
-        cur.execute("""
-            SELECT text, fish_text, children_reply_1, children_reply_2,
-                   child_reply_1_embedding, child_reply_2_embedding,
-                   user_embedding <-> %s::vector as distance
-            FROM conversations
-            WHERE development_stage = %s
-            ORDER BY distance
-            LIMIT 1;
-        """, (query_vector, development_stage))
-        result = cur.fetchone()
-        if result:
-            print(f"[類似検索] 見つかった例: '{result['text']}'")
-            print(f"[類似検索] 類似度スコア: {result['distance']:.4f}")
-            return result
-        else:
-            print(f"[類似検索] {development_stage}に該当する例が見つかりませんでした")
-            return None
+    # 🔥 DB検索を非同期実行（ブロッキングI/Oを別スレッドで）
+    t_db_start = time.time()
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, 
+        search_db_optimized, 
+        query_vector, 
+        development_stage
+    )
+    t_db_end = time.time()
+    
+    t_total = time.time() - t_start
+    
+    if result:
+        print(f"[類似検索] 見つかった例: '{result['text']}'")
+        print(f"[類似検索] 類似度スコア: {result['distance']:.4f}")
+        print(f"[類似検索] DB検索時間: {t_db_end - t_db_start:.3f}秒")
+        print(f"[類似検索] 総処理時間: {t_total:.3f}秒")
+        return result
+    else:
+        print(f"[類似検索] {development_stage}に該当する例が見つかりませんでした")
+        return None
+def search_db_optimized(query_vector, development_stage):
+    """最適化されたDB検索（同期関数）"""
+    try:
+        with pg_conn.cursor() as cur:
+            # 🔥 最適化されたクエリ
+            # - インデックスを活用するため ORDER BY で直接距離演算子を使用
+            # - LIMIT 1 で早期終了
+            cur.execute("""
+                SELECT 
+                    text, 
+                    fish_text, 
+                    children_reply_1, 
+                    children_reply_2,
+                    child_reply_1_embedding, 
+                    child_reply_2_embedding,
+                    user_embedding <-> %s::vector as distance
+                FROM conversations
+                WHERE development_stage = %s
+                ORDER BY user_embedding <-> %s::vector
+                LIMIT 1;
+            """, (query_vector, development_stage, query_vector))
+            
+            return cur.fetchone()
+            
+    except Exception as e:
+        print(f"[DB検索エラー] {e}")
+        return None
 
 def get_medaka_reply(user_input, health_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
     start = time.time()
@@ -625,36 +673,6 @@ STAGE_PROGRESSION = {
     "stage_3": "stage_3"
 }
 
-def upgrade_development_stage(profile_id: int, current_stage: str) -> str:
-    """発達段階を1つ上げる"""
-    next_stage = STAGE_PROGRESSION.get(current_stage, current_stage)
-    
-    if next_stage == current_stage:
-        print(f"[発達段階] すでに最高段階: {current_stage}")
-        return current_stage
-    
-    try:
-        with pg_conn.cursor() as cur:
-            cur.execute("""
-                UPDATE profiles 
-                SET development_stage = %s,
-                    updated_at = NOW()
-                WHERE id = %s
-                RETURNING development_stage;
-            """, (next_stage, profile_id))
-            
-            result = cur.fetchone()
-            
-            if result:
-                print(f"[発達段階] 昇格成功: {current_stage} → {next_stage} (Profile ID: {profile_id})")
-                return next_stage
-            else:
-                print(f"[発達段階] プロファイルが見つかりません: Profile ID {profile_id}")
-                return current_stage
-                
-    except Exception as e:
-        print(f"[発達段階] 更新エラー: {e}")
-        return current_stage
 
 # 会話分類
 async def classify_child_response(
@@ -708,6 +726,37 @@ async def classify_child_response(
     print(f"[発達段階判定] 結果: {result} (信頼度: {confidence:.4f})")
     
     return result, maintain_similarity, upgrade_similarity
+
+#"""発達段階を1つ上げる"""
+def upgrade_development_stage(profile_id: int, current_stage: str) -> str:
+    next_stage = STAGE_PROGRESSION.get(current_stage, current_stage)
+    
+    if next_stage == current_stage:
+        print(f"[発達段階] すでに最高段階: {current_stage}")
+        return current_stage
+    
+    try:
+        with pg_conn.cursor() as cur:
+            cur.execute("""
+                UPDATE profiles 
+                SET development_stage = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING development_stage;
+            """, (next_stage, profile_id))
+            
+            result = cur.fetchone()
+            
+            if result:
+                print(f"[発達段階] 昇格成功: {current_stage} → {next_stage} (Profile ID: {profile_id})")
+                return next_stage
+            else:
+                print(f"[発達段階] プロファイルが見つかりません: Profile ID {profile_id}")
+                return current_stage
+                
+    except Exception as e:
+        print(f"[発達段階] 更新エラー: {e}")
+        return current_stage
 
 
 # ✅ ブラウザから元気度を受信するエンドポイント
