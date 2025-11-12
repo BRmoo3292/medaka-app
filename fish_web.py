@@ -24,7 +24,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
-model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
+model_gemini = genai.GenerativeModel(model_name="gemini-1.5-flash")
 
 print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
 print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
@@ -557,11 +557,11 @@ def get_medaka_reply(user_input, health_status="不明", conversation_hist=None,
     print(f"[応答生成] プロンプト作成完了\n{prompt}")
     
     # Gemini設定
-    generation_config = genai.types.GenerationConfig(
-        temperature=1,
-        top_p=0.1,
-        top_k=1
-    )
+    generation_config = {
+        "temperature": 1,
+        "top_p": 0.1,
+        "top_k": 1,
+    }
     
     response = model_gemini.generate_content(
         prompt,
