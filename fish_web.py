@@ -187,7 +187,7 @@ async def transcribe_audio(file: UploadFile):
             temp_audio_path = temp_audio.name
     with open(temp_audio_path, "rb") as audio_file:
             transcript = await openai_client.audio.transcriptions.create(
-                model="gpt-4o-mini-transcribe",
+                model="gpt-4o-transcribe",
                 file=audio_file,
                 language="ja",
                 response_format="text"  # 🆕 textに変更（より高速）
