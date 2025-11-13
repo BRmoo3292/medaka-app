@@ -158,7 +158,7 @@ async def find_similar_conversation(user_input: str, development_stage: str):
             WHERE development_stage = %s
             ORDER BY distance
             LIMIT 1;
-        """, (np.array(query_vector), development_stage))
+        """, (query_vector, development_stage))
         result = cur.fetchone()
         if result:
             print(f"[類似検索] 見つかった例: '{result['text']}'")
