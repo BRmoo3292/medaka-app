@@ -429,51 +429,46 @@ async def generate_tts(text: str) -> str:
 
 
 # ベクトル検索の関数
-async def find_similar_conversation(user_input: str, development_stage: str):
-    """最適化されたベクトル検索（インデックス活用版）"""
+async def find_similvar_conversation(user_input: str, development_stage: str):
     print(f"[ベクトル化] ユーザー入力: {user_input}")
-    
-    # エンベッディング生成の時間計測
-    t_embed_start = time.time()
+    t1 = time.time()
     resp = await openai_client.embeddings.create(
         input=[user_input],
         model="text-embedding-ada-002"
     )
     query_vector = resp.data[0].embedding
-    t_embed_end = time.time()
-    print(f"[ベクトル化] 完了: {t_embed_end - t_embed_start:.3f}秒 (次元: {len(query_vector)})")
-    
-    # DB検索の時間計測
-    t_db_start = time.time()
+    t2 = time.time()
+    print(f"  ├─ エンベッディング生成: {t2 - t1:.3f}秒")
+    t3 = time.time()
+    print(f"  ├─ DB接続取得: {t3 - t2:.3f}秒")
+    t4 = time.time()
     with pg_conn.cursor() as cur:
-        # 🔥 修正: ORDER BYで直接距離演算子を使用（インデックスが使われる）
+        t5 = time.time()
+        print(f"  ├─ カーソル作成: {t5 - t4:.3f}秒")
         cur.execute("""
-            SELECT 
-                text, 
-                fish_text, 
-                children_reply_1, 
-                children_reply_2,
-                child_reply_1_embedding, 
-                child_reply_2_embedding,
-                user_embedding <-> %s::vector as distance
+            SELECT text, fish_text, children_reply_1, children_reply_2,
+                   child_reply_1_embedding, child_reply_2_embedding,
+                   user_embedding <-> %s::vector as distance
             FROM conversations
             WHERE development_stage = %s
-            ORDER BY user_embedding <-> %s::vector
+            ORDER BY distance
             LIMIT 1;
-        """, (query_vector, development_stage, query_vector))
-        
+        """, (query_vector, development_stage))
+        t6 = time.time()
+        print(f"  ├─ クエリ実行: {t6 - t5:.3f}秒")
         result = cur.fetchone()
-    
-    t_db_end = time.time()
-    
-    if result:
-        print(f"[類似検索] 見つかった例: '{result['text']}'")
-        print(f"[類似検索] 類似度スコア: {result['distance']:.4f}")
-        print(f"[類似検索] DB検索時間: {t_db_end - t_db_start:.3f}秒")
-        return result
-    else:
-        print(f"[類似検索] {development_stage}に該当する例が見つかりませんでした")
-        return None
+        t7 = time.time()
+        print(f"  └─ データ取得: {t7 - t6:.3f}秒")
+        t_total = time.time() - t1
+        print(f"[類似検索] 合計: {t_total:.3f}秒")
+        if result:
+            print(f"[類似検索] 見つかった例: '{result['text']}'")
+            print(f"[類似検索] 類似度スコア: {result['distance']:.4f}")
+            return result
+        else:
+            print(f"[類似検索] {development_stage}に該当する例が見つかりませんでした")
+            return None
+
 def get_medaka_reply(user_input, health_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
     start = time.time()
     
