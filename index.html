@@ -375,7 +375,6 @@ const browserDetectionModule = {
 
     async loadModel() {
         try {
-            console.log('[ブラウザ検出] モデル読み込み開始...');
             const modelUrl = `${window.location.origin}/best.onnx`;
             // ✅ fetchオプションを明示的に設定
             const sessionOptions = {
@@ -386,7 +385,6 @@ const browserDetectionModule = {
                 logSeverityLevel: 3
             };
             // ✅ まずfetchでモデルをダウンロード
-            console.log('[モデル] ダウンロード開始...');
             const response = await fetch(modelUrl, {
                 method: 'GET',
                 mode: 'cors',
@@ -396,19 +394,13 @@ const browserDetectionModule = {
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            const arrayBuffer = await response.arrayBuffer();
-            console.log(`[モデル] ダウンロード完了: ${arrayBuffer.byteLength} bytes`);
-            
+            const arrayBuffer = await response.arrayBuffer();        
             // ✅ ArrayBufferから直接モデルを作成
             this.session = await ort.InferenceSession.create(arrayBuffer, sessionOptions);
             
             this.modelLoaded = true;
-            console.log('✅ [ブラウザ検出] モデル読み込み完了');
             elements.statusDiv.textContent = "✅ 検出モデル準備完了";
         } catch (error) {
-            console.error('❌ [ブラウザ検出] モデル読み込み失敗:', error);
-            console.error('エラー詳細:', error.message);
-            console.error('スタック:', error.stack);
             elements.statusDiv.textContent = "⚠️ モデル読み込み失敗";
         }
     },
@@ -427,9 +419,6 @@ const browserDetectionModule = {
             const startTime = performance.now();
             const results = await this.session.run({ images: inputTensor });
             const inferenceTime = performance.now() - startTime;
-            
-            console.log(`[ブラウザ検出] 推論時間: ${inferenceTime.toFixed(1)}ms`);
-            
             // 結果を後処理
             const detections = this.postprocess(results);
             
@@ -483,9 +472,6 @@ const browserDetectionModule = {
     const output = results.output0;
     const outputData = output.data;
     const [batchSize, numAttributes, numBoxes] = output.dims;
-    
-    console.log(`[後処理] 出力形状: [${output.dims.join(', ')}]`);
-    
     const detections = [];
     const confThreshold = 0.5;
     const iouThreshold = 0.45;
@@ -521,8 +507,6 @@ const browserDetectionModule = {
     
     // NMS（Non-Maximum Suppression）を適用
     const filteredDetections = this.applyNMS(detections, iouThreshold);
-    
-    console.log(`[後処理] 検出数: ${filteredDetections.length}`);
     return filteredDetections;
 },applyNMS(boxes, iouThreshold) {
     // 信頼度でソート
@@ -752,23 +736,6 @@ const medakaVitalityModule = {
     },
     
     /**
-     * デバッグ情報をコンソールに出力
-     */
-    logVitalityInfo(vitality, detectionCount) {
-        if (this.speedHistory.length > 0 && this.speedHistory.length % 15 === 0) {
-            console.log("\n" + "=".repeat(50));
-            console.log("🐟 メダカ元気度分析");
-            console.log("=".repeat(50));
-            console.log(`検出数: ${detectionCount} 匹`);
-            console.log(`平均速度: ${vitality.avgSpeed} px/秒`);
-            console.log(`元気度: ${vitality.statusJa} (${vitality.score}/100)`);
-            console.log(`データポイント: ${vitality.dataPoints}/${this.maxHistoryLength}`);
-            console.log(`実効FPS: ${this.fps.toFixed(1)}`);
-            console.log("=".repeat(50) + "\n");
-        }
-    },
-    
-    /**
      * 元気度をサーバーに送信（既存のAPIとの連携用）
      */
     async sendVitalityToServer(vitality) {
@@ -795,7 +762,6 @@ const medakaVitalityModule = {
         this.trackHistory.clear();
         this.speedHistory = [];
         this.lastFrameTime = null;
-        console.log("[元気度] 追跡データをリセットしました");
     }
 };
 // 画像処理・送信機能
@@ -808,7 +774,6 @@ const imageModule = {
         try {
             // ✅ モデルが読み込まれていない場合はスキップ
             if (!browserDetectionModule.modelLoaded) {
-                console.log('[検出] モデル未読み込み - スキップ');
                 appState.isSending = false;
                 return;
             }
@@ -987,8 +952,6 @@ const speechModule = {
             this.vadPaused = false;  // 🆕 初期化
             elements.statusDiv.textContent = "🎤 話しかけてください...";
             elements.statusDiv.classList.remove('recording');
-            console.log('[VAD] 音声検出開始');
-            
             this.monitorVoiceLevel();
             
         } catch (error) {
@@ -1024,7 +987,6 @@ const speechModule = {
                         this.silenceTimeout = setTimeout(() => {
                             const recordingDuration = Date.now() - this.recordingStartTime;
                             if (recordingDuration >= this.MIN_RECORDING_TIME) {
-                                console.log('[VAD] 無音検出 - 録音停止');
                                 this.stopRecording();
                             }
                         }, this.SILENCE_DURATION);
@@ -1048,13 +1010,9 @@ const speechModule = {
         
         // 🔒 VADが一時停止中は録音開始しない
         if (this.vadPaused) {
-            console.log('[録音] スキップ - VAD一時停止中');
             return;
         }
-            this.mediaRecorder = new MediaRecorder(this.stream, {
-        mimeType: 'audio/webm;codecs=opus',
-        audioBitsPerSecond: 32000  // 🔥 128000 → 16000 に削減（音声認識には十分）
-    });
+        
         try {
             this.recordingStartTime = Date.now();
             
@@ -1102,21 +1060,17 @@ const speechModule = {
             
             // 🔒 録音停止したら一時的にVADを停止
             this.pauseVAD();
-            
-            console.log('[録音] 停止');
         }
     },
 
     pauseVAD() {
         // VAD監視を一時停止（isListeningはtrueのまま、音声検出だけ無効化）
         this.vadPaused = true;
-        console.log('[VAD] 🔒 一時停止 - メダカの応答待ち');
     },
 
     resumeVAD() {
         // VAD監視を再開
         this.vadPaused = false;
-        console.log('[VAD] ✅ 再開 - 次の音声を待機');
     },
 
     stopListening() {
@@ -1140,7 +1094,6 @@ const speechModule = {
         
         elements.statusDiv.textContent = "⏹️ 音声検出停止";
         elements.statusDiv.classList.remove('recording');
-        console.log('[VAD] 音声検出停止');
     },
 
 async sendAudioToServer(audioBlob) {
@@ -1464,14 +1417,6 @@ const app = {
         document.addEventListener('touchmove', function(){}, {passive: true});
     }
 };
-// モデルが読み込まれているか確認
-console.log('モデル読み込み状態:', browserDetectionModule.modelLoaded);
-
-// 検出が実行されているか確認
-console.log('送信中フラグ:', appState.isSending);
-
-// フレーム更新が動いているか確認
-console.log('現在の表示モード:', appState.showingAnalysis ? '解析結果' : 'カメラ');
 app.init();
   </script>
 </body>
