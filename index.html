@@ -1051,7 +1051,10 @@ const speechModule = {
             console.log('[録音] スキップ - VAD一時停止中');
             return;
         }
-        
+            this.mediaRecorder = new MediaRecorder(this.stream, {
+        mimeType: 'audio/webm;codecs=opus',
+        audioBitsPerSecond: 32000  // 🔥 128000 → 16000 に削減（音声認識には十分）
+    });
         try {
             this.recordingStartTime = Date.now();
             
