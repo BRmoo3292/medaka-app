@@ -646,9 +646,6 @@ const medakaVitalityModule = {
         // 元気度を計算
         const vitality = this.calculateVitality();
         
-        // デバッグ情報を表示
-        this.logVitalityInfo(vitality, detections.length);
-        
         return vitality;
     },
     
@@ -939,7 +936,14 @@ const speechModule = {
         if (this.isListening) return;
         
         try {
-            this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            this.stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                channelCount: 1,           // モノラル
+                sampleRate: 16000          // 🔥 16kHz（Whisper推奨）
+            }});
             
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             this.analyser = this.audioContext.createAnalyser();
