@@ -139,7 +139,6 @@ def get_profile_sync(profile_id: int):
             raise HTTPException(404, "Profile not found")
         return profile
 
-
 @app.get("/best.onnx")
 async def serve_onnx_model():
     """ブラウザ検出用のONNXモデルを配信"""
@@ -200,6 +199,144 @@ async def transcribe_audio(file: UploadFile):
             "language": "ja"
         }
 
+# assess_child_expression_level 関数を追加
+async def assess_child_expression_level(child_input: str, current_stage: str) -> dict:
+    """
+    児童の発話から自己表現レベルを判定（LLM使用）
+    
+    Returns:
+        {
+            'detected_stage': 'stage_1' | 'stage_2' | 'stage_3',
+            'confidence': 0.0-1.0,
+            'reasoning': '判定理由',
+            'should_upgrade': True | False
+        }
+    """
+    print(f"[発話レベル判定] 現在: {current_stage}, 入力: '{child_input}'")
+    
+    # 発達段階の定義
+    stage_definitions = {
+        'stage_1': """
+【Stage 1: 単語・最小限の応答レベル】
+＜発話の特徴＞
+-応答が 単語やごく短い文のみ
+-会話を 自発的に始めることができない
+-相手に話しかけられても、返答できるのは限られた場面だけ
+-言葉が出ないことやオウム返しが多い
+-話を広げたり質問を返したりは難しい
+""",
+        'stage_2': """
+【Stage 2: 短文・断片的な応答レベル】
+-話題を広げる・興味を共有することが難しい
+-応答が短い、曖昧な返事が多い
+-やり取りのテンポが遅れる・ズレることがある
+-「メダカ5匹いる」「速いね、新幹線みたい」など短文で返せる
+-「かな」「たぶん」など曖昧な返事でやり取りが止まる
+""",
+        'stage_3': """
+【Stage 3: 文章・一方的な説明レベル】
+-会話自体は成立するが、一方的になりやすい
+-相手の発言に応答できず、キャッチボールが途切れることがある
+-会話の順番が守れない／相手の気持ちを汲めない
+-友達関係を築くのが難しい
+-論理的で長い説明をするが、相手の興味に合わない
+-相手の返答を拾わず、自分の話を続けてしまう
+-表面上は会話できているが、噛み合わないことが多い
+"""
+    }
+    
+    prompt = f"""
+あなたは児童の言語発達の専門家です。以下の発話を分析し、自己表現レベルを判定してください。
+【発達段階の定義】
+{stage_definitions['stage_1']}
+{stage_definitions['stage_2']}
+{stage_definitions['stage_3']}
+【現在の登録段階】
+{current_stage}
+【児童の発話】
+「{child_input}」
+【判定手順】
+1. 発話の長さを確認（単語数・文の数）
+2. 文法構造を確認（単語のみ / 短文 / 複数文）
+3. 自発性を確認
+4. 語彙の豊富さを確認
+
+【重要な判定基準】
+- Stage 1: 単語のみ、5語以下、文構造なし
+- Stage 2: 短文、10-20語、情報が断片的
+- Stage 3: 複数文、30語以上、詳細だが一方的
+
+以下のJSON形式のみを出力してください。
+
+{{
+  "detected_stage": "stage_1",
+  "confidence": 0.85,
+  "reasoning": "単語のみで文構造がないため",
+  "word_count": 3
+}}
+
+**JSONのみを出力してください。**
+"""
+    
+    try:
+        generation_config = genai.types.GenerationConfig(
+            temperature=0.3,
+            top_p=0.9,
+            top_k=40,
+            max_output_tokens=200
+        )
+        
+        response = model_gemini.generate_content(
+            prompt,
+            generation_config=generation_config
+        )
+        
+        # JSONをパース
+        import json
+        response_text = response.text.strip()
+        response_text = response_text.replace('```json\n', '').replace('```\n', '').replace('```', '').strip()
+        
+        result = json.loads(response_text)
+        
+        # 🔥 1段階昇格のみ許可（飛び級なし）
+        stage_order = {'stage_1': 1, 'stage_2': 2, 'stage_3': 3}
+        current_level = stage_order.get(current_stage, 1)
+        detected_level = stage_order.get(result['detected_stage'], 1)
+        
+        # 昇格判定（1段階のみ）
+        if detected_level == current_level + 1:
+            result['should_upgrade'] = True
+            print(f"✅ [発話レベル判定] 1段階昇格を推奨: {current_stage} → {result['detected_stage']}")
+        elif detected_level > current_level + 1:
+            # 飛び級は許可しない
+            result['should_upgrade'] = False
+            print(f"⚠️ [発話レベル判定] 飛び級は不可: {current_stage} → {result['detected_stage']}")
+        else:
+            result['should_upgrade'] = False
+            print(f"[発話レベル判定] 昇格なし: 検出={result['detected_stage']}, 現在={current_stage}")
+        
+        print(f"[発話レベル判定] 信頼度: {result['confidence']:.2f}")
+        print(f"[発話レベル判定] 理由: {result['reasoning']}")
+        
+        return result
+        
+    except json.JSONDecodeError as e:
+        print(f"⚠️ [発話レベル判定] JSON解析エラー: {e}")
+        return {
+            'detected_stage': current_stage,
+            'confidence': 0.0,
+            'reasoning': 'JSON解析エラー',
+            'should_upgrade': False
+        }
+    except Exception as e:
+        print(f"❌ [発話レベル判定] エラー: {e}")
+        return {
+            'detected_stage': current_stage,
+            'confidence': 0.0,
+            'reasoning': 'エラー発生',
+            'should_upgrade': False
+        }
+
 @app.post("/talk_with_fish_text")
 async def talk_with_fish_text(file: UploadFile):
     start_total = time.time()
@@ -237,6 +374,7 @@ async def talk_with_fish_text(file: UploadFile):
     
     assessment_result = None  
     similar_example = None
+    expression_assessment = None  # 🔥 追加
 
     if session is None:
         print("[会話フロー] 1回目の会話 - 類似例を検索")
@@ -248,6 +386,35 @@ async def talk_with_fish_text(file: UploadFile):
         time_log['03_ベクトル検索'] = t2 - t1
         print(f"[⏱️ ベクトル検索] {time_log['03_ベクトル検索']:.2f}秒")
         
+        # 🔥 類似例がない場合、発話レベル判定を実行
+        if similar_example is None or similar_example.get('distance', 1.0) >= 0.5:
+            print("[会話フロー] 類似例なし/低い類似度 - 発話レベル判定を実行")
+            
+            t1 = time.time()
+            expression_assessment = await assess_child_expression_level(user_input, current_stage)
+            t2 = time.time()
+            time_log['03_発話レベル判定'] = t2 - t1
+            print(f"[⏱️ 発話レベル判定] {time_log['03_発話レベル判定']:.2f}秒")
+            
+            # 🔥 昇格判定（信頼度0.7以上 かつ 1段階昇格推奨）
+            if expression_assessment['should_upgrade'] and expression_assessment['confidence'] >= 0.7:
+                upgrade_result = upgrade_by_expression_assessment(
+                    CURRENT_PROFILE_ID,
+                    current_stage,
+                    expression_assessment['reasoning']
+                )
+                
+                if upgrade_result['success']:
+                    # プロファイルを更新
+                    profile['development_stage'] = upgrade_result['new_stage']
+                    current_stage = upgrade_result['new_stage']
+                    print(f"✅ [段階変更] {upgrade_result['old_stage']} → {upgrade_result['new_stage']}")
+            else:
+                if expression_assessment['confidence'] < 0.7:
+                    print(f"[段階変更] スキップ - 信頼度不足 ({expression_assessment['confidence']:.2f})")
+                else:
+                    print(f"[段階変更] スキップ - 昇格条件を満たさない")
+        
         # ⏱️ 4. メダカ応答生成
         t1 = time.time()
         reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
@@ -257,9 +424,17 @@ async def talk_with_fish_text(file: UploadFile):
         
         # ⏱️ 5. セッション作成
         t1 = time.time()
-        if (similar_example and 
+        # 🔥 最高段階チェックを追加
+        is_max_stage = current_stage == "stage_3"
+        
+        if is_max_stage:
+            print(f"[セッション] 最高段階 {current_stage} - 判定スキップ")
+        elif (similar_example and 
             'child_reply_1_embedding' in similar_example and 
+            'child_reply_2_embedding' in similar_example and 
+            similar_example.get('child_reply_2_embedding') is not None and
             similar_example['distance'] < 0.5):
+            
             session = ConversationSession(
                     profile_id=CURRENT_PROFILE_ID,
                     first_input=user_input,
@@ -270,12 +445,14 @@ async def talk_with_fish_text(file: UploadFile):
             active_session[CURRENT_PROFILE_ID] = session
             print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
         else:
-            print(f"[セッション] 類似度が低い - 通常の会話として処理")
+            print(f"[セッション] 通常の会話として処理")
+        
         t2 = time.time()
         time_log['05_セッション作成'] = t2 - t1
         print(f"[⏱️ セッション作成] {time_log['05_セッション作成']:.2f}秒")
         
     else:
+        # 2回目の会話（既存のコードと同じ）
         print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
         
         # ⏱️ 3. 発達段階判定
@@ -521,8 +698,8 @@ def get_medaka_reply(user_input, health_status="不明", conversation_hist=None,
         response_strategy = """
 【応答戦略】
 児童の発話が「抽象的」か「具体的」かを判断し、使い分けてください。
-- **発話が抽象的な場合**: 必ず2択や「どっち？」で答えを引き出すか、児童の単語に追加の言葉をつけて誘導する。
-- **発話が具体的な場合**: 児童の単語を短文に直して返す。または、発話をそのまま肯定しつつ、感情表現や語彙を少し増やす（例：「きれい」→「きれいだね〜！ピカピカしててうれしいね」）。
+**発話が抽象的な場合**: 必ず2択や「どっち？」で答えを引き出すか、児童の単語に追加の言葉をつけて誘導する。
+**発話が具体的な場合**: 児童の単語を短文に直して返す。または、発話をそのまま肯定しつつ、感情表現や語彙を少し増やす（例：「きれい」→「きれいだね〜！ピカピカしててうれしいね」）。
 """
     elif child_expression_level == 2:
         response_strategy = """
@@ -588,6 +765,7 @@ def get_medaka_reply(user_input, health_status="不明", conversation_hist=None,
     
     return reply
 
+
 class ConversationSession:
     def __init__(self, profile_id: int, first_input: str, medaka_response: str, similar_example: dict, current_stage: str):
         self.profile_id = profile_id
@@ -647,13 +825,12 @@ STAGE_PROGRESSION = {
     "stage_3": "stage_3"
 }
 
-
 # 会話分類
 async def classify_child_response(
         child_response: str,
         similar_conversation: dict,
         openai_client,
-        threshold: float = 0.5
+        threshold: float = 0.8
 ) -> tuple[str, float, float]:
     print(f"[発達段階判定] 児童の応答: '{child_response}'")
     
@@ -701,6 +878,71 @@ async def classify_child_response(
     
     return result, maintain_similarity, upgrade_similarity
 
+def upgrade_by_expression_assessment(profile_id: int, current_stage: str, reasoning: str = "") -> dict:
+    """
+    発話レベル判定による段階昇格（1段階のみ、飛び級なし）
+    
+    Returns:
+        {
+            'success': True | False,
+            'old_stage': 'stage_X',
+            'new_stage': 'stage_X',
+            'reasoning': '理由'
+        }
+    """
+    # 次の段階を取得（STAGE_PROGRESSIONを使用）
+    next_stage = STAGE_PROGRESSION.get(current_stage, current_stage)
+    
+    # すでに最高段階
+    if next_stage == current_stage:
+        print(f"[発話昇格] すでに最高段階: {current_stage}")
+        return {
+            'success': False,
+            'old_stage': current_stage,
+            'new_stage': current_stage,
+            'reasoning': '既に最高段階'
+        }
+    
+    try:
+        with pg_conn.cursor() as cur:
+            cur.execute("""
+                UPDATE profiles 
+                SET development_stage = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING development_stage;
+            """, (next_stage, profile_id))
+            
+            result = cur.fetchone()
+            
+            if result:
+                print(f"🎉 [発話昇格] 成功: {current_stage} → {next_stage}")
+                if reasoning:
+                    print(f"   理由: {reasoning}")
+                
+                return {
+                    'success': True,
+                    'old_stage': current_stage,
+                    'new_stage': next_stage,
+                    'reasoning': reasoning
+                }
+            else:
+                print(f"⚠️ [発話昇格] プロファイルが見つかりません")
+                return {
+                    'success': False,
+                    'old_stage': current_stage,
+                    'new_stage': current_stage,
+                    'reasoning': 'プロファイル未検出'
+                }
+                
+    except Exception as e:
+        print(f"❌ [発話昇格] エラー: {e}")
+        return {
+            'success': False,
+            'old_stage': current_stage,
+            'new_stage': current_stage,
+            'reasoning': f'エラー: {str(e)}'
+        }
 #"""発達段階を1つ上げる"""
 def upgrade_development_stage(profile_id: int, current_stage: str) -> str:
     next_stage = STAGE_PROGRESSION.get(current_stage, current_stage)
