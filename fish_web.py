@@ -210,8 +210,6 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
             'should_upgrade': True | False
         }
     """
-    print(f"[発話レベル判定] 現在: {current_stage}, 入力: '{child_input}'")
-    
     # 発達段階の定義
     stage_definitions = {
         'stage_1': """
@@ -258,11 +256,6 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
 2. 文法構造を確認（単語のみ / 短文 / 複数文）
 3. 自発性を確認
 4. 語彙の豊富さを確認
-
-【重要な判定基準】
-- Stage 1: 単語のみ、5語以下、文構造なし
-- Stage 2: 短文、10-20語、情報が断片的
-- Stage 3: 複数文、30語以上、詳細だが一方的
 
 以下のJSON形式のみを出力してください。
 
@@ -315,7 +308,6 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
         
         print(f"[発話レベル判定] 信頼度: {result['confidence']:.2f}")
         print(f"[発話レベル判定] 理由: {result['reasoning']}")
-        
         return result
         
     except json.JSONDecodeError as e:
@@ -334,6 +326,7 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
             'reasoning': 'エラー発生',
             'should_upgrade': False
         }
+
 
 @app.post("/talk_with_fish_text")
 async def talk_with_fish_text(file: UploadFile):
@@ -391,52 +384,72 @@ async def talk_with_fish_text(file: UploadFile):
         if similar_example is None:
             print("[会話フロー] 類似例なし - 発話レベル判定を実行")
             use_similar_example = False
-        elif similar_example.get('distance', 1.0) >= SIMILARITY_THRESHOLD:
-            print(f"[会話フロー] 類似度が低い ({similar_example['distance']:.4f} >= {SIMILARITY_THRESHOLD}) - 発話レベル判定を実行")
-            use_similar_example = False
         else:
             print(f"[会話フロー] 類似度が高い ({similar_example['distance']:.4f} < {SIMILARITY_THRESHOLD}) - 類似例を使用")
             use_similar_example = True
         
-        # 🔥 類似例を使わない場合、発話レベル判定を実行
         if not use_similar_example:
+            print("[会話フロー] 発話レベル判定+応答生成を並列実行")
             t1 = time.time()
-            expression_assessment = await assess_child_expression_level(user_input, current_stage)
+            
+            # 🔥 並列タスク作成
+            assessment_task = assess_child_expression_level(user_input, current_stage)
+            reply_task = asyncio.to_thread(
+                get_medaka_reply,
+                user_input, 
+                latest_health, 
+                current_history, 
+                None,  # 類似例なし
+                profile
+            )
+            
+            # 両方の完了を待つ
+            expression_assessment, reply_text = await asyncio.gather(
+                assessment_task,
+                reply_task
+            )
+            
             t2 = time.time()
-            time_log['03_発話レベル判定'] = t2 - t1
-            print(f"[⏱️ 発話レベル判定] {time_log['03_発話レベル判定']:.2f}秒")
+            time_log['03_発話レベル判定+応答生成'] = t2 - t1
+            print(f"[⏱️ 発話レベル判定+応答生成（並列）] {time_log['03_発話レベル判定+応答生成']:.2f}秒")
             
             # 🔥 昇格判定（信頼度0.7以上 かつ 1段階昇格推奨）
             if expression_assessment['should_upgrade'] and expression_assessment['confidence'] >= 0.7:
-                upgrade_result = upgrade_by_expression_assessment(
+                t3 = time.time()
+                upgrade_result = await upgrade_by_expression_assessment_async(
                     CURRENT_PROFILE_ID,
                     current_stage,
                     expression_assessment['reasoning']
                 )
+                t4 = time.time()
+                time_log['03_段階更新'] = t4 - t3
+                print(f"[⏱️ 段階更新] {time_log['03_段階更新']:.2f}秒")
                 
                 if upgrade_result['success']:
                     profile['development_stage'] = upgrade_result['new_stage']
                     current_stage = upgrade_result['new_stage']
                     print(f"✅ [段階変更] {upgrade_result['old_stage']} → {upgrade_result['new_stage']}")
             else:
-                if expression_assessment['confidence'] < 0.7:
-                    print(f"[段階変更] スキップ - 信頼度不足 ({expression_assessment['confidence']:.2f})")
+                if expression_assessment.get('confidence', 0) < 0.7:
+                    print(f"[段階変更] スキップ - 信頼度不足 ({expression_assessment.get('confidence', 0):.2f})")
                 else:
                     print(f"[段階変更] スキップ - 昇格条件を満たさない")
         
-        # ⏱️ 4. メダカ応答生成
-        t1 = time.time()
-        # 🔥 use_similar_example フラグに基づいて応答生成
-        reply_text = get_medaka_reply(
-            user_input, 
-            latest_health, 
-            current_history, 
-            similar_example if use_similar_example else None,  # 🔥 フラグで制御
-            profile
-        )
-        t2 = time.time()
-        time_log['04_応答生成'] = t2 - t1
-        print(f"[⏱️ 応答生成] {time_log['04_応答生成']:.2f}秒")
+        else:
+            # 🔥 類似例を使う場合（既存の処理）
+            print("[会話フロー] 類似例を使用した応答生成")
+            t1 = time.time()
+            reply_text = await asyncio.to_thread(
+                get_medaka_reply,
+                user_input, 
+                latest_health, 
+                current_history, 
+                similar_example,  # 類似例を渡す
+                profile
+            )
+            t2 = time.time()
+            time_log['04_応答生成'] = t2 - t1
+            print(f"[⏱️ 応答生成] {time_log['04_応答生成']:.2f}秒")
         
         # ⏱️ 5. セッション作成
         t1 = time.time()
@@ -444,7 +457,7 @@ async def talk_with_fish_text(file: UploadFile):
         
         if is_max_stage:
             print(f"[セッション] 最高段階 {current_stage} - 判定スキップ")
-        elif (use_similar_example and  # 🔥 フラグを確認
+        elif (use_similar_example and
             similar_example and 
             'child_reply_1_embedding' in similar_example and 
             'child_reply_2_embedding' in similar_example and 
@@ -464,8 +477,7 @@ async def talk_with_fish_text(file: UploadFile):
         
         t2 = time.time()
         time_log['05_セッション作成'] = t2 - t1
-        print(f"[⏱️ セッション作成] {time_log['05_セッション作成']:.2f}秒")
-        
+        print(f"[⏱️ セッション作成] {time_log['05_セッション作成']:.2f}秒")   
     else:
         # 2回目の会話（既存のコードと同じ）
         print("[会話フロー] 2回目の会話 - 発達段階判定を実行")
@@ -619,23 +631,14 @@ async def generate_tts(text: str) -> str:
                 tts_file.write(chunk)
             return tts_file.name
 
-# ベクトル検索の関数
-async def find_similar_conversation(user_input: str, development_stage: str):
-    print(f"[ベクトル化] ユーザー入力: {user_input}")
-    t1 = time.time()
+async def find_similar_conversation(user_input: str, development_stage: str, similarity_threshold: float = 0.3):
     resp = await openai_client.embeddings.create(
         input=[user_input],
         model="text-embedding-ada-002"
     )
     query_vector = resp.data[0].embedding
-    t2 = time.time()
-    print(f"  ├─ エンベッディング生成: {t2 - t1:.3f}秒")
-    t3 = time.time()
-    print(f"  ├─ DB接続取得: {t3 - t2:.3f}秒")
-    t4 = time.time()
+    
     with pg_conn.cursor() as cur:
-        t5 = time.time()
-        print(f"  ├─ カーソル作成: {t5 - t4:.3f}秒")
         cur.execute("""
             SELECT text, fish_text, children_reply_1, children_reply_2,
                    child_reply_1_embedding, child_reply_2_embedding,
@@ -645,21 +648,15 @@ async def find_similar_conversation(user_input: str, development_stage: str):
             ORDER BY distance
             LIMIT 1;
         """, (query_vector, development_stage))
-        t6 = time.time()
-        print(f"  ├─ クエリ実行: {t6 - t5:.3f}秒")
+        
         result = cur.fetchone()
-        t7 = time.time()
-        print(f"  └─ データ取得: {t7 - t6:.3f}秒")
-        t_total = time.time() - t1
-        print(f"[類似検索] 合計: {t_total:.3f}秒")
-        if result:
-            print(f"[類似検索] 見つかった例: '{result['text']}'")
-            print(f"[類似検索] 類似度スコア: {result['distance']:.4f}")
+        
+        if result and result['distance'] < similarity_threshold:
+            print("[類似会話] 類似例が見つかりました:", result['text'] )
             return result
         else:
-            print(f"[類似検索] {development_stage}に該当する例が見つかりませんでした")
+            print("[類似会話] 類似例は見つかりませんでした")
             return None
-
 def get_medaka_reply(user_input, health_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
     start = time.time()
     
@@ -892,19 +889,11 @@ async def classify_child_response(
     
     return result, maintain_similarity, upgrade_similarity
 
-def upgrade_by_expression_assessment(profile_id: int, current_stage: str, reasoning: str = "") -> dict:
+async def upgrade_by_expression_assessment_async(profile_id: int, current_stage: str, reasoning: str = "") -> dict:
     """
-    発話レベル判定による段階昇格（1段階のみ、飛び級なし）
-    
-    Returns:
-        {
-            'success': True | False,
-            'old_stage': 'stage_X',
-            'new_stage': 'stage_X',
-            'reasoning': '理由'
-        }
+    発話レベル判定による段階昇格（非同期版）
     """
-    # 次の段階を取得（STAGE_PROGRESSIONを使用）
+    # 次の段階を取得
     next_stage = STAGE_PROGRESSION.get(current_stage, current_stage)
     
     # すでに最高段階
@@ -917,6 +906,12 @@ def upgrade_by_expression_assessment(profile_id: int, current_stage: str, reason
             'reasoning': '既に最高段階'
         }
     
+    # 🔥 同期処理を非同期で実行
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _upgrade_stage_sync, profile_id, current_stage, next_stage, reasoning)
+
+def _upgrade_stage_sync(profile_id: int, current_stage: str, next_stage: str, reasoning: str) -> dict:
+    """同期的なDB更新処理"""
     try:
         with pg_conn.cursor() as cur:
             cur.execute("""
