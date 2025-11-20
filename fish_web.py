@@ -164,7 +164,6 @@ async def serve_onnx_model():
             "Content-Length": str(len(content))
         }
     )
-
 @app.options("/best.onnx")
 async def options_onnx_model():
     return Response(
@@ -174,7 +173,6 @@ async def options_onnx_model():
             "Access-Control-Allow-Headers": "*"
         }
     )
-
 
 @app.post("/transcribe_audio")
 async def transcribe_audio(file: UploadFile):
@@ -374,7 +372,8 @@ async def talk_with_fish_text(file: UploadFile):
     
     assessment_result = None  
     similar_example = None
-    expression_assessment = None  # 🔥 追加
+    expression_assessment = None
+    use_similar_example = False  # 🔥 追加：類似例を使うかどうかのフラグ
 
     if session is None:
         print("[会話フロー] 1回目の会話 - 類似例を検索")
@@ -386,10 +385,21 @@ async def talk_with_fish_text(file: UploadFile):
         time_log['03_ベクトル検索'] = t2 - t1
         print(f"[⏱️ ベクトル検索] {time_log['03_ベクトル検索']:.2f}秒")
         
-        # 🔥 類似例がない場合、発話レベル判定を実行
-        if similar_example is None or similar_example.get('distance', 1.0) >= 0.5:
-            print("[会話フロー] 類似例なし/低い類似度 - 発話レベル判定を実行")
-            
+        # 🔥 類似度の閾値判定（統一された基準）
+        SIMILARITY_THRESHOLD = 0.3  # この値より小さい = 類似度が高い
+        
+        if similar_example is None:
+            print("[会話フロー] 類似例なし - 発話レベル判定を実行")
+            use_similar_example = False
+        elif similar_example.get('distance', 1.0) >= SIMILARITY_THRESHOLD:
+            print(f"[会話フロー] 類似度が低い ({similar_example['distance']:.4f} >= {SIMILARITY_THRESHOLD}) - 発話レベル判定を実行")
+            use_similar_example = False
+        else:
+            print(f"[会話フロー] 類似度が高い ({similar_example['distance']:.4f} < {SIMILARITY_THRESHOLD}) - 類似例を使用")
+            use_similar_example = True
+        
+        # 🔥 類似例を使わない場合、発話レベル判定を実行
+        if not use_similar_example:
             t1 = time.time()
             expression_assessment = await assess_child_expression_level(user_input, current_stage)
             t2 = time.time()
@@ -405,7 +415,6 @@ async def talk_with_fish_text(file: UploadFile):
                 )
                 
                 if upgrade_result['success']:
-                    # プロファイルを更新
                     profile['development_stage'] = upgrade_result['new_stage']
                     current_stage = upgrade_result['new_stage']
                     print(f"✅ [段階変更] {upgrade_result['old_stage']} → {upgrade_result['new_stage']}")
@@ -417,23 +426,29 @@ async def talk_with_fish_text(file: UploadFile):
         
         # ⏱️ 4. メダカ応答生成
         t1 = time.time()
-        reply_text = get_medaka_reply(user_input, latest_health, current_history, similar_example, profile)
+        # 🔥 use_similar_example フラグに基づいて応答生成
+        reply_text = get_medaka_reply(
+            user_input, 
+            latest_health, 
+            current_history, 
+            similar_example if use_similar_example else None,  # 🔥 フラグで制御
+            profile
+        )
         t2 = time.time()
         time_log['04_応答生成'] = t2 - t1
         print(f"[⏱️ 応答生成] {time_log['04_応答生成']:.2f}秒")
         
         # ⏱️ 5. セッション作成
         t1 = time.time()
-        # 🔥 最高段階チェックを追加
         is_max_stage = current_stage == "stage_3"
         
         if is_max_stage:
             print(f"[セッション] 最高段階 {current_stage} - 判定スキップ")
-        elif (similar_example and 
+        elif (use_similar_example and  # 🔥 フラグを確認
+            similar_example and 
             'child_reply_1_embedding' in similar_example and 
             'child_reply_2_embedding' in similar_example and 
-            similar_example.get('child_reply_2_embedding') is not None and
-            similar_example['distance'] < 0.5):
+            similar_example.get('child_reply_2_embedding') is not None):
             
             session = ConversationSession(
                     profile_id=CURRENT_PROFILE_ID,
@@ -603,7 +618,6 @@ async def generate_tts(text: str) -> str:
             async for chunk in response.iter_bytes():
                 tts_file.write(chunk)
             return tts_file.name
-
 
 # ベクトル検索の関数
 async def find_similar_conversation(user_input: str, development_stage: str):
