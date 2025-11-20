@@ -252,10 +252,15 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
 【児童の発話】
 「{child_input}」
 【判定手順】
-1. 発話の長さを確認（単語数・文の数）
-2. 文法構造を確認（単語のみ / 短文 / 複数文）
-3. 自発性を確認
-4. 語彙の豊富さを確認
+1. 発話の内容・意図を確認（何を伝えようとしているか）
+2. 会話的な要素を確認（興味共有・質問・同意など）
+3. 発話の長さを確認（単語数・文の数）
+4. 自発性を確認
+
+**重要**: 文法の正確さより、コミュニケーション意図を優先してください。
+- 「今日の天気めっちゃいいね」→ 興味共有あり → stage_2
+- 「うん」「そう」→ 最小限応答 → stage_1
+
 
 以下のJSON形式のみを出力してください。
 
@@ -348,7 +353,7 @@ async def talk_with_fish_text(file: UploadFile):
     
     user_input = transcription_result["text"]
     current_stage = profile["development_stage"]
-    
+    print(f"児童の発話:{user_input}")
     t2 = time.time()
     time_log['01_音声認識+プロファイル'] = t2 - t1
     print(f"[⏱️ 音声認識+プロファイル（並列）] {time_log['01_音声認識+プロファイル']:.2f}秒")
