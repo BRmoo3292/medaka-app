@@ -655,13 +655,15 @@ async def find_similar_conversation(user_input: str, development_stage: str, sim
         """, (query_vector, development_stage))
         
         result = cur.fetchone()
-        
+        print(f"[類似検索] 見つかった例: '{result['text']}'")
+        print(f"[類似検索] 類似度スコア: {result['distance']:.4f}")
         if result and result['distance'] < similarity_threshold:
             print("[類似会話] 類似例が見つかりました:", result['text'] )
             return result
         else:
             print("[類似会話] 類似例は見つかりませんでした")
             return None
+        
 def get_medaka_reply(user_input, health_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
     start = time.time()
     
