@@ -383,7 +383,7 @@ async def talk_with_fish_text(file: UploadFile):
         print(f"[⏱️ ベクトル検索] {time_log['03_ベクトル検索']:.2f}秒")
         
         # 🔥 類似度の閾値判定（統一された基準）
-        SIMILARITY_THRESHOLD = 0.3  # この値より小さい = 類似度が高い
+        SIMILARITY_THRESHOLD = 1.0  # この値より小さい = 類似度が高い
         
         if similar_example is None:
             print("[会話フロー] 類似例なし - 発話レベル判定を実行")
@@ -434,7 +434,7 @@ async def talk_with_fish_text(file: UploadFile):
                     current_stage = upgrade_result['new_stage']
                     print(f"✅ [段階変更] {upgrade_result['old_stage']} → {upgrade_result['new_stage']}")
             else:
-                if expression_assessment.get('confidence', 0) < 1.0:
+                if expression_assessment.get('confidence', 0) < 0.7:
                     print(f"[段階変更] スキップ - 信頼度不足 ({expression_assessment.get('confidence', 0):.2f})")
                 else:
                     print(f"[段階変更] スキップ - 昇格条件を満たさない")
