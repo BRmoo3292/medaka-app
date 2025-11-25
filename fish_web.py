@@ -332,7 +332,6 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
             'should_upgrade': False
         }
 
-
 @app.post("/talk_with_fish_text")
 async def talk_with_fish_text(file: UploadFile):
     start_total = time.time()
@@ -435,7 +434,7 @@ async def talk_with_fish_text(file: UploadFile):
                     current_stage = upgrade_result['new_stage']
                     print(f"✅ [段階変更] {upgrade_result['old_stage']} → {upgrade_result['new_stage']}")
             else:
-                if expression_assessment.get('confidence', 0) < 0.7:
+                if expression_assessment.get('confidence', 0) < 1.0:
                     print(f"[段階変更] スキップ - 信頼度不足 ({expression_assessment.get('confidence', 0):.2f})")
                 else:
                     print(f"[段階変更] スキップ - 昇格条件を満たさない")
@@ -636,10 +635,10 @@ async def generate_tts(text: str) -> str:
                 tts_file.write(chunk)
             return tts_file.name
 
-async def find_similar_conversation(user_input: str, development_stage: str, similarity_threshold: float = 0.3):
+async def find_similar_conversation(user_input: str, development_stage: str, similarity_threshold: float = 0.45):
     resp = await openai_client.embeddings.create(
         input=[user_input],
-        model="text-embedding-ada-002"
+        model="text-embedding-3-small"
     )
     query_vector = resp.data[0].embedding
     
@@ -783,7 +782,6 @@ def get_medaka_reply(user_input, health_status="不明", conversation_hist=None,
     
     return reply
 
-
 class ConversationSession:
     def __init__(self, profile_id: int, first_input: str, medaka_response: str, similar_example: dict, current_stage: str):
         self.profile_id = profile_id
@@ -848,13 +846,13 @@ async def classify_child_response(
         child_response: str,
         similar_conversation: dict,
         openai_client,
-        threshold: float = 0.8
+        threshold: float = 1.0
 ) -> tuple[str, float, float]:
     print(f"[発達段階判定] 児童の応答: '{child_response}'")
     
     resp = await openai_client.embeddings.create(
         input=[child_response],
-        model="text-embedding-ada-002"
+        model="text-embedding-3-small"
     )
     response_vector = np.array(resp.data[0].embedding)
     
@@ -959,6 +957,7 @@ def _upgrade_stage_sync(profile_id: int, current_stage: str, next_stage: str, re
             'new_stage': current_stage,
             'reasoning': f'エラー: {str(e)}'
         }
+
 #"""発達段階を1つ上げる"""
 def upgrade_development_stage(profile_id: int, current_stage: str) -> str:
     next_stage = STAGE_PROGRESSION.get(current_stage, current_stage)
@@ -989,7 +988,6 @@ def upgrade_development_stage(profile_id: int, current_stage: str) -> str:
     except Exception as e:
         print(f"[発達段階] 更新エラー: {e}")
         return current_stage
-
 
 # ✅ ブラウザから元気度を受信するエンドポイント
 @app.post("/update_health")
