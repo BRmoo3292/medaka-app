@@ -958,37 +958,7 @@ const speechModule = {
             await this.startVoiceDetection();
         }
     },
-    async loadProfiles() {
-    const res = await fetch(`${CONFIG.SERVER_URL}/profiles`);
-    const profiles = await res.json();
-    
-    const select = document.getElementById('profileSelect');
-    profiles.forEach(p => {
-        const option = document.createElement('option');
-        option.value = p.id;
-        option.textContent = `${p.name} (${p.age}歳)`;
-        select.appendChild(option);
-    });
-    
-    select.addEventListener('change', (e) => {
-        appState.currentProfileId = parseInt(e.target.value);
-        CONFIG.PROFILE_ID = appState.currentProfileId;
-    });
-    
-    document.getElementById('addAccountBtn').addEventListener('click', async () => {
-        const name = prompt('名前を入力:');
-        const age = prompt('年齢を入力:');
-        if (name && age) {
-            await fetch(`${CONFIG.SERVER_URL}/profiles`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name, age: parseInt(age)})
-            });
-            await this.loadProfiles();
-        }
-    });
-},
-    
+  
 async startVoiceDetection() {
         if (this.isListening) return;
         
@@ -1473,7 +1443,36 @@ const app = {
         
         console.log('🐠 魚認識アプリが初期化されました (ブラウザ検出)');
     },
-
+    
+    async loadProfiles() {
+    const res = await fetch(`${CONFIG.SERVER_URL}/profiles`);
+    const profiles = await res.json();
+    
+    const select = document.getElementById('profileSelect');
+    profiles.forEach(p => {
+        const option = document.createElement('option');
+        option.value = p.id;
+        option.textContent = `${p.name} (${p.age}歳)`;
+        select.appendChild(option);
+    });
+        document.getElementById('addAccountBtn').addEventListener('click', async () => {
+        const name = prompt('名前を入力:');
+        const age = prompt('年齢を入力:');
+        if (name && age) {
+            await fetch(`${CONFIG.SERVER_URL}/profiles`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, age: parseInt(age)})
+            });
+            await this.loadProfiles();
+        }
+    });
+    select.addEventListener('change', (e) => {
+        appState.currentProfileId = parseInt(e.target.value);
+        CONFIG.PROFILE_ID = appState.currentProfileId;
+    });
+},
+  
     optimizeTouchEvents() {
         document.addEventListener('touchstart', function(){}, {passive: true});
         document.addEventListener('touchmove', function(){}, {passive: true});
