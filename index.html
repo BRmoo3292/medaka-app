@@ -1454,9 +1454,9 @@ const uiModule = {
 // アプリケーション初期化・メイン処理
 const app = {
     async init() {
-        await this.loadProfiles();  
-        elements.vadControls.classList.add('hidden');
         
+        elements.vadControls.classList.add('hidden');
+        await this.loadProfiles();  
         // ✅ ブラウザ検出モデルを読み込み
         await browserDetectionModule.loadModel();
         
