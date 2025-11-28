@@ -34,7 +34,6 @@ print(f"[起動時] Gemini API: {'設定済み' if GEMINI_API_KEY else '未設�
 active_session = {}
 conversation_history = defaultdict(lambda: deque(maxlen=10))
 latest_health = "Normal"
-CURRENT_PROFILE_ID = 1
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -115,6 +114,8 @@ def connect_to_database(db_url, max_retries=3):
             break
     
     return None  
+class CONFIG:
+    PROFILE_ID = 1  # デフォルト値
 # データベース接続
 try:
     pg_conn = connect_to_database(DB_URL)
@@ -342,7 +343,7 @@ async def talk_with_fish_text(file: UploadFile):
     
     # 🔥 並列タスクを作成
     transcription_task = transcribe_audio(file)
-    profile_task = get_profile_async(CURRENT_PROFILE_ID)
+    profile_task = await get_profile_async(CONFIG.PROFILE_ID)
     
     # 両方の完了を待つ
     transcription_result, profile = await asyncio.gather(
@@ -359,10 +360,10 @@ async def talk_with_fish_text(file: UploadFile):
     
     # ⏱️ 2. 会話履歴の初期化
     t1 = time.time()
-    if CURRENT_PROFILE_ID not in conversation_history:
-        conversation_history[CURRENT_PROFILE_ID] = []
-    current_history = conversation_history[CURRENT_PROFILE_ID]
-    session = active_session.get(CURRENT_PROFILE_ID)
+    if CONFIG.PROFILE_ID not in conversation_history:
+        conversation_history[CONFIG.PROFILE_ID] = []
+    current_history = conversation_history[CONFIG.PROFILE_ID]
+    session = active_session.get(CONFIG.PROFILE_ID)
     t2 = time.time()
     time_log['02_履歴初期化'] = t2 - t1
     print(f"[⏱️ 履歴初期化] {time_log['02_履歴初期化']:.2f}秒")
@@ -421,7 +422,7 @@ async def talk_with_fish_text(file: UploadFile):
             if expression_assessment['should_upgrade'] and expression_assessment['confidence'] >= 0.7:
                 t3 = time.time()
                 upgrade_result = await upgrade_by_expression_assessment_async(
-                    CURRENT_PROFILE_ID,
+                    CONFIG.PROFILE_ID,
                     current_stage,
                     expression_assessment['reasoning']
                 )
@@ -468,13 +469,13 @@ async def talk_with_fish_text(file: UploadFile):
             similar_example.get('child_reply_2_embedding') is not None):
             
             session = ConversationSession(
-                    profile_id=CURRENT_PROFILE_ID,
+                    profile_id=CONFIG.PROFILE_ID,
                     first_input=user_input,
                     medaka_response=reply_text,
                     similar_example=similar_example,
                     current_stage=current_stage
             )
-            active_session[CURRENT_PROFILE_ID] = session
+            active_session[CONFIG.PROFILE_ID] = session
             print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
         else:
             print(f"[セッション] 通常の会話として処理")
@@ -508,7 +509,7 @@ async def talk_with_fish_text(file: UploadFile):
         }
         
         if assessment[0] == "昇格":
-            new_stage = upgrade_development_stage(CURRENT_PROFILE_ID, current_stage)
+            new_stage = upgrade_development_stage(CONFIG.PROFILE_ID, current_stage)
             profile["development_stage"] = new_stage
             
             if new_stage != current_stage:
@@ -537,7 +538,7 @@ async def talk_with_fish_text(file: UploadFile):
         # ⏱️ 6. セッション完了処理
         t1 = time.time()
         session_id = session.complete_session(user_input, assessment)
-        del active_session[CURRENT_PROFILE_ID]
+        del active_session[CONFIG.PROFILE_ID]
         print(f"[セッション] 判定完了 - セッションID: {session_id}")
         t2 = time.time()
         time_log['06_セッション完了'] = t2 - t1
@@ -553,13 +554,13 @@ async def talk_with_fish_text(file: UploadFile):
             "similarity_score": similar_example['distance'] if similar_example else None,
             "has_assessment": assessment_result is not None,
             "assessment_result": assessment_result,
-            "session_status": "started" if session and CURRENT_PROFILE_ID in active_session else "completed"
+            "session_status": "started" if session and CONFIG.PROFILE_ID in active_session else "completed"
     }
-    conversation_history[CURRENT_PROFILE_ID].append(conversation_entry)
-    if len(conversation_history[CURRENT_PROFILE_ID]) > 20:
-        conversation_history[CURRENT_PROFILE_ID] = conversation_history[CURRENT_PROFILE_ID][-20:]
+    conversation_history[CONFIG.PROFILE_ID].append(conversation_entry)
+    if len(conversation_history[CONFIG.PROFILE_ID]) > 20:
+        conversation_history[CONFIG.PROFILE_ID] = conversation_history[CONFIG.PROFILE_ID][-20:]
 
-    print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CURRENT_PROFILE_ID])}")
+    print(f"[会話履歴] 現在の履歴件数: {len(conversation_history[CONFIG.PROFILE_ID])}")
     t2 = time.time()
     time_log['07_履歴保存'] = t2 - t1
     print(f"[⏱️ 履歴保存] {time_log['07_履歴保存']:.2f}秒")
@@ -1013,6 +1014,29 @@ async def update_health(request: Request):
 async def read_index():
     return FileResponse('index.html', media_type='text/html')
 
+#プロファイルの取得
+@app.get("/profiles")
+async def get_profiles():
+    """全プロファイル取得"""
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT id, name, age, development_stage FROM profiles ORDER BY id;")
+        return cur.fetchall()
+
+@app.post("/profiles")
+async def create_profile(request: Request):
+    """新規プロファイル作成"""
+    data = await request.json()
+    name = data.get("name")
+    age = data.get("age")
+    
+    with pg_conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO profiles (name, age, development_stage, created_at, updated_at)
+            VALUES (%s, %s, 'stage_1', NOW(), NOW())
+            RETURNING id, name, age, development_stage;
+        """, (name, age))
+        return cur.fetchone()
+    
 def get_proactive_medaka_message(conversation_count, profile):
     """会話回数に応じてメダカからのプロアクティブメッセージを生成"""
     messages = {
@@ -1085,20 +1109,20 @@ async def get_proactive_message(request: Request):
 @app.get("/conversation_history")
 async def get_conversation_history():
     """現在のプロファイルの会話履歴を取得"""
-    if CURRENT_PROFILE_ID in conversation_history:
+    if CONFIG.PROFILE_ID in conversation_history:
         return {
-            "profile_id": CURRENT_PROFILE_ID,
-            "history": list(conversation_history[CURRENT_PROFILE_ID])
+            "profile_id": CONFIG.PROFILE_ID,
+            "history": list(conversation_history[CONFIG.PROFILE_ID])
         }
     else:
-        return {"profile_id": CURRENT_PROFILE_ID, "history": []}
+        return {"profile_id": CONFIG.PROFILE_ID, "history": []}
 
 @app.delete("/conversation_history")
 async def clear_conversation_history():
     """現在のプロファイルの会話履歴をクリア"""
-    if CURRENT_PROFILE_ID in conversation_history:
-        del conversation_history[CURRENT_PROFILE_ID]
-    return {"message": f"History cleared for profile {CURRENT_PROFILE_ID}"}
+    if CONFIG.PROFILE_ID in conversation_history:
+        del conversation_history[CONFIG.PROFILE_ID]
+    return {"message": f"History cleared for profile {CONFIG.PROFILE_ID}"}
 
 @app.post("/test_vector_search")
 async def test_vector_search(request: Request):

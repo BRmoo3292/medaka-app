@@ -265,7 +265,28 @@
     .hidden {
       display: none !important;
     }
-    
+    .account-section {
+        display: flex;
+        gap: 10px;
+        margin: 10px 0;
+        justify-content: center;
+    }
+    .profile-selector {
+        padding: 10px 15px;
+        border-radius: 20px;
+        border: 2px solid rgba(255,255,255,0.3);
+        background: rgba(255,255,255,0.1);
+        color: white;
+        font-size: 14px;
+    }
+    .account-btn {
+        padding: 10px 20px;
+        border-radius: 20px;
+        border: none;
+        background: linear-gradient(135deg, #f093fb, #f5576c);
+        color: white;
+        cursor: pointer;
+    }
     @media (max-width: 768px) {
       .container {
         padding: 5px;
@@ -297,7 +318,12 @@
 <body>
   <div class="container">
     <h1>メダカにお話ししてね！</h1>
-    
+    <div class="account-section">
+  <select id="profileSelect" class="profile-selector">
+    <option value="">アカウントを選択...</option>
+  </select>
+  <button id="addAccountBtn" class="account-btn">➕ 新規作成</button>
+</div>
     <div class="display-section">
       <div class="view-container">
         <video id="video" autoplay playsinline muted></video>
@@ -358,6 +384,7 @@ const fullscreenCtx = elements.fullscreenCanvas.getContext('2d');
 // グローバル状態管理
 const appState = {
     isFullscreen: false,
+    currentProfileId: null ,
     currentImageData: null,
     isRecording: false,
     shouldRestart: true,
@@ -931,8 +958,38 @@ const speechModule = {
             await this.startVoiceDetection();
         }
     },
-
-    async startVoiceDetection() {
+    async loadProfiles() {
+    const res = await fetch(`${CONFIG.SERVER_URL}/profiles`);
+    const profiles = await res.json();
+    
+    const select = document.getElementById('profileSelect');
+    profiles.forEach(p => {
+        const option = document.createElement('option');
+        option.value = p.id;
+        option.textContent = `${p.name} (${p.age}歳)`;
+        select.appendChild(option);
+    });
+    
+    select.addEventListener('change', (e) => {
+        appState.currentProfileId = parseInt(e.target.value);
+        CONFIG.PROFILE_ID = appState.currentProfileId;
+    });
+    
+    document.getElementById('addAccountBtn').addEventListener('click', async () => {
+        const name = prompt('名前を入力:');
+        const age = prompt('年齢を入力:');
+        if (name && age) {
+            await fetch(`${CONFIG.SERVER_URL}/profiles`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, age: parseInt(age)})
+            });
+            await this.loadProfiles();
+        }
+    });
+},
+    
+async startVoiceDetection() {
         if (this.isListening) return;
         
         try {
@@ -1397,6 +1454,7 @@ const uiModule = {
 // アプリケーション初期化・メイン処理
 const app = {
     async init() {
+        await this.loadProfiles();  
         elements.vadControls.classList.add('hidden');
         
         // ✅ ブラウザ検出モデルを読み込み
