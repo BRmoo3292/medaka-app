@@ -341,13 +341,11 @@ async def talk_with_fish_text(file: UploadFile):
     # ⏱️ 1. 音声認識とプロファイル取得を完全並列実行
     t1 = time.time()
     
-    # 🔥 並列タスクを作成
-    profile_task = await get_profile_async(CONFIG.PROFILE_ID)
     
     # 両方の完了を待つ
     transcription_result, profile = await asyncio.gather(
         transcribe_audio(file),
-        profile_task
+        await get_profile_async(CONFIG.PROFILE_ID)
     )
     
     user_input = transcription_result["text"]
