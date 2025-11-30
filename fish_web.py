@@ -1011,6 +1011,30 @@ async def update_health(request: Request):
 async def read_index():
     return FileResponse('index.html', media_type='text/html')
 
+@app.post("/set_current_profile")
+async def set_current_profile(request: Request):
+    """現在のプロファイルIDを設定"""
+    data = await request.json()
+    profile_id = data.get("profile_id")
+    
+    if not profile_id:
+        raise HTTPException(400, "profile_id is required")
+    
+    # 🔥 変更前の値をログ出力
+    old_id = CONFIG.PROFILE_ID
+    CONFIG.PROFILE_ID = profile_id
+    
+    print(f"[プロファイル変更] {old_id} → {profile_id}")
+    
+    # 🔥 確認のため取得してログ出力
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT name, age FROM profiles WHERE id = %s;", (profile_id,))
+        profile = cur.fetchone()
+        if profile:
+            print(f"[プロファイル変更] 選択: {profile['name']}さん ({profile['age']}歳)")
+    
+    return {"success": True, "current_profile_id": CONFIG.PROFILE_ID}
+
 #プロファイルの取得
 @app.get("/profiles")
 async def get_profiles():

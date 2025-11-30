@@ -1444,33 +1444,94 @@ const app = {
         console.log('🐠 魚認識アプリが初期化されました (ブラウザ検出)');
     },
     
-    async loadProfiles() {
-    const res = await fetch(`${CONFIG.SERVER_URL}/profiles`);
-    const profiles = await res.json();
-    
-    const select = document.getElementById('profileSelect');
-    profiles.forEach(p => {
-        const option = document.createElement('option');
-        option.value = p.id;
-        option.textContent = `${p.name} (${p.age}歳)`;
-        select.appendChild(option);
-    });
-        document.getElementById('addAccountBtn').addEventListener('click', async () => {
-        const name = prompt('名前を入力:');
-        const age = prompt('年齢を入力:');
-        if (name && age) {
-            await fetch(`${CONFIG.SERVER_URL}/profiles`, {
+async loadProfiles() {
+    try {
+        const res = await fetch(`${CONFIG.SERVER_URL}/profiles`);
+        const profiles = await res.json();
+        
+        const select = document.getElementById('profileSelect');
+        select.innerHTML = '<option value="">アカウントを選択...</option>';
+        
+        profiles.forEach(p => {
+            const option = document.createElement('option');
+            option.value = p.id;
+            option.textContent = `${p.name} (${p.age}歳)`;
+            select.appendChild(option);
+        });
+        
+        // 🔥 最初のアカウントを自動選択
+        if (profiles.length > 0) {
+            select.value = profiles[0].id;
+            CONFIG.PROFILE_ID = profiles[0].id;
+            
+            await fetch(`${CONFIG.SERVER_URL}/set_current_profile`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({profile_id: profiles[0].id})
+            });
+            
+            elements.statusDiv.textContent = `👤 ${profiles[0].name}さんを選択中`;
+            console.log('✅ 初期選択:', profiles[0].name, 'ID:', profiles[0].id);
+        }
+        
+        // 🔥 イベントリスナーを一度だけ登録（既存のリスナーを削除）
+        const newSelect = select.cloneNode(true);
+        select.parentNode.replaceChild(newSelect, select);
+        
+        newSelect.addEventListener('change', async (e) => {
+            const profileId = parseInt(e.target.value);
+            if (!profileId) return;
+            
+            appState.currentProfileId = profileId;
+            CONFIG.PROFILE_ID = profileId;
+            
+            console.log('📡 サーバーに送信:', profileId);
+            
+            const response = await fetch(`${CONFIG.SERVER_URL}/set_current_profile`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({profile_id: profileId})
+            });
+            
+            const result = await response.json();
+            console.log('✅ サーバー応答:', result);
+            
+            const selectedText = e.target.options[e.target.selectedIndex].text;
+            elements.statusDiv.textContent = `👤 ${selectedText} を選択中`;
+        });
+        
+        // 新規作成ボタン（こちらも再登録）
+        const addBtn = document.getElementById('addAccountBtn');
+        const newAddBtn = addBtn.cloneNode(true);
+        addBtn.parentNode.replaceChild(newAddBtn, addBtn);
+        
+        newAddBtn.addEventListener('click', async () => {
+            const name = prompt('名前を入力:');
+            if (!name) return;
+            
+            const age = prompt('年齢を入力:');
+            if (!age || isNaN(age)) {
+                alert('年齢は数字で入力してください');
+                return;
+            }
+            
+            const res = await fetch(`${CONFIG.SERVER_URL}/profiles`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({name, age: parseInt(age)})
             });
-            await this.loadProfiles();
-        }
-    });
-    select.addEventListener('change', (e) => {
-        appState.currentProfileId = parseInt(e.target.value);
-        CONFIG.PROFILE_ID = appState.currentProfileId;
-    });
+            
+            if (res.ok) {
+                alert('✅ アカウントを作成しました');
+                await this.loadProfiles();
+            }
+        });
+        
+        console.log(`✅ ${profiles.length}件のアカウント読み込み完了`);
+        
+    } catch (error) {
+        console.error('❌ アカウント読み込みエラー:', error);
+    }
 },
   
     optimizeTouchEvents() {
