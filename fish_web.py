@@ -190,7 +190,7 @@ async def transcribe_audio(file: UploadFile):
                 language="ja",
                 response_format="text"  # 🆕 textに変更（より高速）
             )
-
+    os.unlink(temp_audio_path)
         # textの場合、transcriptは文字列で返ってくる
     return {
             "text": transcript,  # 直接文字列
@@ -338,23 +338,23 @@ async def talk_with_fish_text(file: UploadFile):
     start_total = time.time()
     time_log = {}
     
-    # ⏱️ 1. 音声認識とプロファイル取得を完全並列実行
+    # ⏱️ 1. 音声認識（先に実行）
     t1 = time.time()
-    
-    
-    # 両方の完了を待つ
-    transcription_result, profile = await asyncio.gather(
-        transcribe_audio(file),
-        await get_profile_async(CONFIG.PROFILE_ID)
-    )
-    
+    transcription_result = await transcribe_audio(file)
     user_input = transcription_result["text"]
-    current_stage = profile["development_stage"]
-    print(f"児童の発話:{user_input}")
     t2 = time.time()
-    time_log['01_音声認識+プロファイル'] = t2 - t1
-    print(f"[⏱️ 音声認識+プロファイル（並列）] {time_log['01_音声認識+プロファイル']:.2f}秒")
+    time_log['01_音声認識'] = t2 - t1
+    print(f"[⏱️ 音声認識] {time_log['01_音声認識']:.2f}秒")
     
+    # ⏱️ 2. プロファイル取得
+    t1 = time.time()
+    profile = await get_profile_async(CONFIG.PROFILE_ID)
+    current_stage = profile["development_stage"]
+    t2 = time.time()
+    time_log['02_プロファイル取得'] = t2 - t1
+    print(f"[⏱️ プロファイル取得] {time_log['02_プロファイル取得']:.2f}秒")
+    
+    print(f"児童の発話:{user_input}")
     # ⏱️ 2. 会話履歴の初期化
     t1 = time.time()
     if CONFIG.PROFILE_ID not in conversation_history:
