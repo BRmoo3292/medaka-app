@@ -342,12 +342,11 @@ async def talk_with_fish_text(file: UploadFile):
     t1 = time.time()
     
     # 🔥 並列タスクを作成
-    transcription_task = transcribe_audio(file)
     profile_task = await get_profile_async(CONFIG.PROFILE_ID)
     
     # 両方の完了を待つ
     transcription_result, profile = await asyncio.gather(
-        transcription_task,
+        transcribe_audio(file),
         profile_task
     )
     
