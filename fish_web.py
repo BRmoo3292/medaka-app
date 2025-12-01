@@ -368,7 +368,7 @@ async def talk_with_fish_text(file: UploadFile):
     assessment_result = None  
     similar_example = None
     expression_assessment = None
-    use_similar_example = False  # 🔥 追加：類似例を使うかどうかのフラグ
+    use_similar_example = False 
 
     if session is None:
         print("[会話フロー] 1回目の会話 - 類似例を検索")
