@@ -390,12 +390,11 @@ async def talk_with_fish_text(file: UploadFile):
             
             # 🔥 並列タスク作成
             assessment_task = assess_child_expression_level(user_input, current_stage)
-            reply_task = asyncio.to_thread(
-                get_medaka_reply,
+            reply_task = await get_medaka_reply(
                 user_input, 
                 latest_health, 
                 current_history, 
-                None,  # 類似例なし
+                None,
                 profile
             )
             
@@ -435,8 +434,7 @@ async def talk_with_fish_text(file: UploadFile):
             # 🔥 類似例を使う場合（既存の処理）
             print("[会話フロー] 類似例を使用した応答生成")
             t1 = time.time()
-            reply_text = await asyncio.to_thread(
-                get_medaka_reply,
+            reply_text = await get_medaka_reply(
                 user_input, 
                 latest_health, 
                 current_history, 
@@ -655,7 +653,7 @@ async def find_similar_conversation(user_input: str, development_stage: str, sim
             print("[類似会話] 類似例は見つかりませんでした")
             return None
         
-def get_medaka_reply(user_input, health_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
+async def get_medaka_reply(user_input, health_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
     start = time.time()
     
     if health_status == "Active":
@@ -755,7 +753,7 @@ def get_medaka_reply(user_input, health_status="不明", conversation_hist=None,
     print(f"[応答生成] プロンプト作成完了\n{prompt}")
 
     
-    response = openai_client.chat.completions.create(
+    response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "あなたは水槽に住むかわいいメダカ「キンちゃん」です。"},
