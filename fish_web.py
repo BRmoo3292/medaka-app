@@ -9,7 +9,6 @@ import asyncio
 from collections import defaultdict, deque
 import tempfile
 import os
-import google.generativeai as genai
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -21,14 +20,12 @@ pg_conn.autocommit = True
 print(f"[起動時] DB接続成功: {DB_URL}")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
-model_gemini = genai.GenerativeModel(model_name="gemini-2.0-flash")
+
 
 print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
 print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
-print(f"[起動時] Gemini API: {'設定済み' if GEMINI_API_KEY else '未設定'}")
+
 
 # グローバル変数
 active_session = {}
@@ -276,23 +273,20 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
 """
     
     try:
-        generation_config = genai.types.GenerationConfig(
+        # Gemini呼び出しを削除し、OpenAI APIに置き換え
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "あなたは児童の言語発達の専門家です。指示に従ってJSON形式のみを出力してください。"},
+                {"role": "user", "content": prompt}
+            ],
             temperature=0.3,
-            top_p=0.9,
-            top_k=40,
-            max_output_tokens=200
+            max_tokens=200
         )
-        
-        response = model_gemini.generate_content(
-            prompt,
-            generation_config=generation_config
-        )
-        
         # JSONをパース
         import json
-        response_text = response.text.strip()
+        response_text = response.choices[0].message.content.strip()
         response_text = response_text.replace('```json\n', '').replace('```\n', '').replace('```', '').strip()
-        
         result = json.loads(response_text)
         
         # 🔥 1段階昇格のみ許可（飛び級なし）
@@ -759,23 +753,21 @@ def get_medaka_reply(user_input, health_status="不明", conversation_hist=None,
 キンちゃん:"""
     
     print(f"[応答生成] プロンプト作成完了\n{prompt}")
+
     
-    # Gemini設定
-    generation_config = genai.types.GenerationConfig(
-        temperature=1,
-        top_p=0.1,
-        top_k=1
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "あなたは水槽に住むかわいいメダカ「キンちゃん」です。"},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=1.0,
+        max_tokens=100
     )
-    
-    response = model_gemini.generate_content(
-        prompt,
-        generation_config=generation_config
-    )
-    
     end = time.time()
-    reply = response.text.strip()
+    reply = response.choices[0].message.content.strip()
     
-    print(f"[Gemini応答生成] 所要時間: {end - start:.2f}秒")
+    print(f"[メダカ応答生成] 所要時間: {end - start:.2f}秒")
     print(f"[応答生成] 生成された応答: '{reply}'")
     
     return reply
