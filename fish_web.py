@@ -387,21 +387,16 @@ async def talk_with_fish_text(file: UploadFile):
         if not use_similar_example:
             print("[会話フロー] 発話レベル判定+応答生成を並列実行")
             t1 = time.time()
-            
-            # 🔥 並列タスク作成
-            assessment_task = assess_child_expression_level(user_input, current_stage)
-            reply_task = await get_medaka_reply(
-                user_input, 
-                latest_health, 
-                current_history, 
-                None,
-                profile
-            )
-            
-            # 両方の完了を待つ
+        
             expression_assessment, reply_text = await asyncio.gather(
-                assessment_task,
-                reply_task
+                assess_child_expression_level(user_input, current_stage),
+                get_medaka_reply(
+                    user_input, 
+                    latest_health, 
+                    current_history, 
+                    None,
+                    profile
+                )
             )
             
             t2 = time.time()
