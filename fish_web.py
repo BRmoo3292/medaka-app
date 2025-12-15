@@ -383,7 +383,7 @@ async def talk_with_fish_text(file: UploadFile):
     t1 = time.time()
     profile = await get_profile_async(CONFIG.PROFILE_ID)
     current_stage = profile["development_stage"]
-    child_name = profile["child_name"]
+    child_name = profile["name"]
     t2 = time.time()
     time_log['02_プロファイル取得'] = t2 - t1
     print(f"[⏱️ プロファイル取得] {time_log['02_プロファイル取得']:.2f}秒")
