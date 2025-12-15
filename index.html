@@ -613,15 +613,13 @@ const medakaVitalityModule = {
     // 追跡データ
     trackHistory: new Map(), // メダカID -> 位置履歴
     speedHistory: [],        // 速度履歴（直近75フレーム分）
-    maxHistoryLength: 75,    // 5秒分の履歴 (15 FPS想定)
+    maxHistoryLength: 30,    // 2秒分の履歴 (15 FPS想定)
     fps: 15,                 // 実効FPS
     
     // 元気度判定の閾値（ピクセル/秒）
     thresholds: {
-        veryActive: 50,   // 50px/秒以上 → 元気
-        active: 20,       // 20-50px/秒 → 普通
-        slow: 5,          // 5-20px/秒 → やや元気がない
-        lethargic: 0      // 5px/秒未満 → ほとんど動かない
+        active: 40,   // 40px/秒以上 → 元気
+        normal: 15,   // 15-40px/秒 → 普通
     },
     
     // 前フレームのタイムスタンプ
@@ -727,25 +725,20 @@ const medakaVitalityModule = {
         // 元気度を判定
         let status, statusJa, score, color;
         
-        if (avgSpeed >= this.thresholds.veryActive) {
+        if (avgSpeed >= this.thresholds.active) {
             status = "Active";
             statusJa = "元気";
             score = 100;
             color = "#00ff00"; // 緑
-        } else if (avgSpeed >= this.thresholds.active) {
+        } else if (avgSpeed >= this.thresholds.normal) {
             status = "Normal";
             statusJa = "普通";
             score = 70;
             color = "#ffff00"; // 黄色
-        } else if (avgSpeed >= this.thresholds.slow) {
-            status = "Slow";
-            statusJa = "やや元気がない";
-            score = 40;
-            color = "#ff9900"; // オレンジ
         } else {
             status = "Lethargic";
-            statusJa = "ほとんど動かない";
-            score = 10;
+            statusJa = "元気ない";
+            score = 30;
             color = "#ff0000"; // 赤
         }
         
