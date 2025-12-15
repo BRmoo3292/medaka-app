@@ -137,6 +137,45 @@ def get_profile_sync(profile_id: int):
             raise HTTPException(404, "Profile not found")
         return profile
 
+def save_conversation_to_db(
+    profile_id: int,
+    speaker: str,  # 'medaka' または 実際のアカウント名
+    message: str,
+    health_status: str = None,
+    development_stage: str = None,
+    similar_example_used: bool = False,
+    similar_example_text: str = None,
+    similarity_score: float = None
+):
+    """会話履歴をデータベースに保存"""
+    try:
+        with pg_conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO conversation_history (
+                    profile_id, speaker, message, health_status, development_stage,
+                    similar_example_used, similar_example_text, similarity_score
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s
+                ) RETURNING id;
+            """, (
+                profile_id,
+                speaker,
+                message,
+                health_status,
+                development_stage,
+                similar_example_used,
+                similar_example_text,
+                similarity_score
+            ))
+            
+            history_id = cur.fetchone()['id']
+            print(f"[会話履歴DB] 保存完了 ID: {history_id} ({speaker}: {message[:30]}...)")
+            return history_id
+            
+    except Exception as e:
+        print(f"[会話履歴DB] 保存エラー: {e}")
+        return None
+    
 @app.get("/best.onnx")
 async def serve_onnx_model():
     """ブラウザ検出用のONNXモデルを配信"""
@@ -344,11 +383,19 @@ async def talk_with_fish_text(file: UploadFile):
     t1 = time.time()
     profile = await get_profile_async(CONFIG.PROFILE_ID)
     current_stage = profile["development_stage"]
+    child_name = profile["child_name"]
     t2 = time.time()
     time_log['02_プロファイル取得'] = t2 - t1
     print(f"[⏱️ プロファイル取得] {time_log['02_プロファイル取得']:.2f}秒")
     
     print(f"児童の発話:{user_input}")
+    save_conversation_to_db(
+        profile_id=CONFIG.PROFILE_ID,
+        speaker=child_name,  # 🔥 'child'ではなく実際の名前
+        message=user_input,
+        health_status=latest_health,
+        development_stage=current_stage
+    )
     # ⏱️ 2. 会話履歴の初期化
     t1 = time.time()
     if CONFIG.PROFILE_ID not in conversation_history:
@@ -402,7 +449,16 @@ async def talk_with_fish_text(file: UploadFile):
             t2 = time.time()
             time_log['03_発話レベル判定+応答生成'] = t2 - t1
             print(f"[⏱️ 発話レベル判定+応答生成（並列）] {time_log['03_発話レベル判定+応答生成']:.2f}秒")
-            
+            save_conversation_to_db(
+                profile_id=CONFIG.PROFILE_ID,
+                speaker='medaka',  # メダカは固定
+                message=reply_text,
+                health_status=latest_health,
+                development_stage=current_stage,
+                similar_example_used=False,
+                similar_example_text=None,
+                similarity_score=None
+            )
             # 🔥 昇格判定（信頼度0.7以上 かつ 1段階昇格推奨）
             if expression_assessment['should_upgrade'] and expression_assessment['confidence'] >= 0.7:
                 t3 = time.time()
@@ -439,7 +495,16 @@ async def talk_with_fish_text(file: UploadFile):
             t2 = time.time()
             time_log['04_応答生成'] = t2 - t1
             print(f"[⏱️ 応答生成] {time_log['04_応答生成']:.2f}秒")
-        
+            save_conversation_to_db(
+                profile_id=CONFIG.PROFILE_ID,
+                speaker='medaka',  # メダカは固定
+                message=reply_text,
+                health_status=latest_health,
+                development_stage=current_stage,
+                similar_example_used=True,
+                similar_example_text=similar_example['text'],
+                similarity_score=similar_example['distance']
+            )
         # ⏱️ 5. セッション作成
         t1 = time.time()
         is_max_stage = current_stage == "stage_3"
@@ -518,12 +583,17 @@ async def talk_with_fish_text(file: UploadFile):
         t2 = time.time()
         time_log['05_応答生成'] = t2 - t1
         print(f"[⏱️ 応答生成] {time_log['05_応答生成']:.2f}秒")
-        
+        save_conversation_to_db(
+            profile_id=CONFIG.PROFILE_ID,
+            speaker='medaka',  # メダカは固定
+            message=reply_text,
+            health_status=latest_health,
+            development_stage=current_stage,
+            similar_example_used=False
+        )
         # ⏱️ 6. セッション完了処理
         t1 = time.time()
-        session_id = session.complete_session(user_input, assessment)
         del active_session[CONFIG.PROFILE_ID]
-        print(f"[セッション] 判定完了 - セッションID: {session_id}")
         t2 = time.time()
         time_log['06_セッション完了'] = t2 - t1
         print(f"[⏱️ セッション完了] {time_log['06_セッション完了']:.2f}秒")
@@ -766,57 +836,30 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
     return reply
 
 class ConversationSession:
-    def __init__(self, profile_id: int, first_input: str, medaka_response: str, similar_example: dict, current_stage: str):
+    def __init__(self, profile_id: int, child_name: str, first_input: str, medaka_response: str, similar_example: dict, current_stage: str):
         self.profile_id = profile_id
+        self.child_name = child_name  # 🔥 追加: 児童の名前
         self.first_child_input = first_input
         self.medaka_response = medaka_response
         self.similar_example = similar_example
         self.current_stage = current_stage
-        self.stared_at = datetime.now()
+        self.started_at = datetime.now()
 
     def complete_session(self, second_input: str, assessment_result: tuple):
-        """セッションを完了し、DBに保存"""
+        """セッションを完了"""
         self.second_child_input = second_input
         self.assessment_result = assessment_result[0]
         self.maintain_score = round(float(assessment_result[1]), 3)
         self.upgrade_score = round(float(assessment_result[2]), 3)
         self.confidence_score = round(float(abs(self.upgrade_score - self.maintain_score)), 5)
         
-        return self._save_to_database()
-    
-    def _save_to_database(self) -> int:
-        """セッションデータをデータベースに保存"""
-        try:
-            with pg_conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO conversation_sessions (
-                        profile_id, first_child_input, medaka_response, second_child_input,
-                        assessment_result, maintain_similarity_score, upgrade_similarity_score, 
-                        confidence_score, current_stage
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    ) RETURNING id;
-                """, (
-                    self.profile_id,
-                    self.first_child_input,
-                    self.medaka_response,
-                    self.second_child_input,
-                    self.assessment_result,
-                    self.maintain_score,      
-                    self.upgrade_score,       
-                    self.confidence_score,   
-                    self.current_stage
-                ))
-                
-                session_id = cur.fetchone()['id']
-                print(f"[セッションDB] 保存完了 ID: {session_id}")
-                print(f"[セッションDB] 判定結果: {self.assessment_result} (信頼度: {self.confidence_score:.3f})")
-                
-                return session_id
-                
-        except Exception as e:
-            print(f"[セッションDB] 保存エラー: {e}")
-            return None
+        # 🔥 conversation_historyには保存しない（既に保存済み）
+        # セッション情報だけログ出力
+        print(f"[セッション完了] プロファイルID: {self.profile_id}")
+        print(f"[セッション完了] 判定結果: {self.assessment_result} (信頼度: {self.confidence_score:.3f})")
+        print(f"[セッション完了] 現状維持スコア: {self.maintain_score}, 昇格スコア: {self.upgrade_score}")
+        
+        return None  # DBには保存しない
 
 STAGE_PROGRESSION = {
     "stage_1": "stage_2",
@@ -1121,7 +1164,14 @@ async def get_proactive_message(request: Request):
     
     conversation_count = len(conversation_history.get(profile_id, []))
     message = get_proactive_medaka_message(conversation_count, profile)
-    
+    save_conversation_to_db(
+        profile_id=profile_id,
+        speaker='medaka',  # メダカは固定
+        message=message,
+        health_status=latest_health,
+        development_stage=profile['development_stage'],
+        similar_example_used=False
+    )
     async with openai_client.audio.speech.with_streaming_response.create(
         model="gpt-4o-mini-tts",
         voice="coral",

@@ -361,7 +361,6 @@ const CONFIG = {
     FRAME_RATE: 34  ,
     PROFILE_ID: 1
 };
-
 // DOM要素の取得
 const elements = {
     video: document.getElementById('video'),
@@ -380,7 +379,6 @@ const elements = {
 };
 const displayCtx = elements.displayCanvas.getContext('2d');
 const fullscreenCtx = elements.fullscreenCanvas.getContext('2d');
-
 // グローバル状態管理
 const appState = {
     isFullscreen: false,
@@ -393,7 +391,6 @@ const appState = {
     wsConnected: false,
     showingAnalysis: false
 };
-
 // ブラウザ物体検出モジュール
 const browserDetectionModule = {
     session: null,
@@ -462,39 +459,30 @@ const browserDetectionModule = {
         canvas.width = this.inputSize;
         canvas.height = this.inputSize;
         const ctx = canvas.getContext('2d');
-        
         // リサイズして描画
         ctx.drawImage(videoElement, 0, 0, this.inputSize, this.inputSize);
-        
         // ImageDataを取得
         const imageData = ctx.getImageData(0, 0, this.inputSize, this.inputSize);
         const pixels = imageData.data;
-        
-        // Float32Array形式に変換 [1, 3, 640, 640]
         const red = new Float32Array(this.inputSize * this.inputSize);
         const green = new Float32Array(this.inputSize * this.inputSize);
         const blue = new Float32Array(this.inputSize * this.inputSize);
-        
         for (let i = 0; i < pixels.length; i += 4) {
             const idx = i / 4;
             red[idx] = pixels[i] / 255.0;     // R
             green[idx] = pixels[i + 1] / 255.0; // G
             blue[idx] = pixels[i + 2] / 255.0;  // B
         }
-        
         // チャネルを結合
         const input = new Float32Array(3 * this.inputSize * this.inputSize);
         input.set(red, 0);
         input.set(green, this.inputSize * this.inputSize);
         input.set(blue, 2 * this.inputSize * this.inputSize);
-        
         // Tensorに変換
         return new ort.Tensor('float32', input, [1, 3, this.inputSize, this.inputSize]);
     },
 
     postprocess(results) {
-    // YOLOv8の出力: [1, 84, 8400]
-    // 84 = 4(bbox) + 80(クラス数)
     const output = results.output0;
     const outputData = output.data;
     const [batchSize, numAttributes, numBoxes] = output.dims;
@@ -620,7 +608,7 @@ const medakaVitalityModule = {
     // 元気度判定の閾値（ピクセル/秒）
     thresholds: {
         active: 40,   // 40px/秒以上 → 元気
-        normal: 15,   // 15-40px/秒 → 普通
+        normal: 30,   // 15-40px/秒 → 普通
     },
     
     lastFrameTime: null,
