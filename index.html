@@ -404,7 +404,7 @@ const browserDetectionModule = {
         try {
             const modelUrl = `${window.location.origin}/best.onnx`;
             const sessionOptions = {
-                executionProviders: ['webgl'],  //iPhoneではwebglが効果的、Androidではwasmが安定
+                executionProviders: ['wasm'],  //iPhoneではwebglが効果的、Androidではwasmが安定
                 graphOptimizationLevel: 'all',
                 enableCpuMemArena: false,
                 enableMemPattern: false,
