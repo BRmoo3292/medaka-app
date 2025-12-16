@@ -422,7 +422,7 @@ async def talk_with_fish_text(file: UploadFile):
         print(f"[⏱️ ベクトル検索] {time_log['03_ベクトル検索']:.2f}秒")
         
         # 🔥 類似度の閾値判定（統一された基準）
-        SIMILARITY_THRESHOLD = 1.0  # この値より小さい = 類似度が高い
+        SIMILARITY_THRESHOLD = 0.88  # この値より小さい = 類似度が高い
         
         if similar_example is None:
             print("[会話フロー] 類似例なし - 発話レベル判定を実行")
@@ -518,11 +518,12 @@ async def talk_with_fish_text(file: UploadFile):
             similar_example.get('child_reply_2_embedding') is not None):
             
             session = ConversationSession(
-                    profile_id=CONFIG.PROFILE_ID,
-                    first_input=user_input,
-                    medaka_response=reply_text,
-                    similar_example=similar_example,
-                    current_stage=current_stage
+                profile_id=CONFIG.PROFILE_ID,
+                child_name=child_name,  # 🔥 追加
+                first_input=user_input,
+                medaka_response=reply_text,
+                similar_example=similar_example,
+                current_stage=current_stage
             )
             active_session[CONFIG.PROFILE_ID] = session
             print(f"[セッション] セッション作成完了 - 次回判定実行予定（類似度: {similar_example['distance']:.4f}）")
