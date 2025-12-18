@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, HTTPException, Request
-from fastapi.responses import FileResponse,Response,StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
@@ -11,26 +11,152 @@ import tempfile
 import os
 from datetime import datetime
 import psycopg2
+from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
+import atexit
 
-# データベースのURLを環境変数から取得
+# ========================================
+# 環境変数・API設定
+# ========================================
 DB_URL = os.getenv("DB_URL")
-pg_conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
-pg_conn.autocommit = True
-print(f"[起動時] DB接続成功: {DB_URL}")
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
 
 print(f"[起動時] DB_URL設定: {'あり' if DB_URL else 'なし'}")
 print(f"[起動時] OpenAI API: {'設定済み' if OPENAI_API_KEY else '未設定'}")
 
+# ========================================
+# データベース接続プールの作成
+# ========================================
+try:
+    # SSL設定の追加
+    db_url = DB_URL
+    if "pooler.supabase.com" in db_url:
+        print("[DB接続] Supabase Pooler接続を使用")
+        if ":5432" in db_url:
+            print("[DB接続] Session Pooler (ポート5432)")
+        elif ":6543" in db_url:
+            print("[DB接続] Transaction Pooler (ポート6543)")
+        
+        if "sslmode=" not in db_url:
+            if "?" in db_url:
+                db_url += "&sslmode=require"
+            else:
+                db_url += "?sslmode=require"
+    
+    # 🔥 接続プールの作成
+    pg_pool = psycopg2.pool.SimpleConnectionPool(
+        1,   # 最小接続数
+        10,  # 最大接続数
+        db_url,
+        cursor_factory=RealDictCursor,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
+        connect_timeout=10
+    )
+    
+    if pg_pool:
+        print("✅ [DB接続プール] 作成成功")
+        
+        # 接続テスト
+        test_conn = pg_pool.getconn()
+        test_conn.autocommit = True
+        
+        with test_conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.execute("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                LIMIT 5;
+            """)
+            tables = cur.fetchall()
+            print(f"[DB情報] 検出されたテーブル: {[t['table_name'] for t in tables]}")
+        
+        pg_pool.putconn(test_conn)
+        
+except Exception as e:
+    print(f"❌ [DB接続プール] 作成失敗: {e}")
+    exit(1)
 
+# ========================================
+# 接続プール管理関数
+# ========================================
+def get_db_connection():
+    """プールから接続を取得"""
+    try:
+        conn = pg_pool.getconn()
+        if conn:
+            # 🔥 必ずautocommitを有効化
+            conn.autocommit = True
+            
+            # 🔥 接続テスト
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                return conn
+            except psycopg2.OperationalError:
+                # 接続が死んでいる場合
+                print("⚠️ [DB接続] 死んだ接続を検出、破棄します")
+                try:
+                    pg_pool.putconn(conn, close=True)  # 接続を破棄
+                except:
+                    pass
+                # 再取得
+                conn = pg_pool.getconn()
+                conn.autocommit = True
+                return conn
+                
+    except Exception as e:
+        print(f"❌ [DB接続] 取得失敗: {e}")
+        return None
+
+def release_db_connection(conn):
+    """接続をプールに戻す"""
+    if not conn:
+        return
+    
+    try:
+        # 未コミットのトランザクションをクリーンアップ
+        if not conn.closed:
+            try:
+                if not conn.autocommit:
+                    conn.rollback()
+            except:
+                pass
+        
+        # プールに戻す
+        pg_pool.putconn(conn)
+        
+    except Exception as e:
+        print(f"⚠️ [DB接続] 解放エラー: {e}")
+
+# アプリケーション終了時にプールをクローズ
+@atexit.register
+def cleanup_pool():
+    """アプリケーション終了時にプールをクローズ"""
+    try:
+        if pg_pool:
+            pg_pool.closeall()
+            print("✅ [DB接続プール] クローズ完了")
+    except:
+        pass
+
+# ========================================
 # グローバル変数
+# ========================================
 active_session = {}
 conversation_history = defaultdict(lambda: deque(maxlen=10))
 latest_health = "Normal"
+
+class CONFIG:
+    PROFILE_ID = 1  # デフォルト値
+
+# ========================================
+# FastAPIアプリ初期化
+# ========================================
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -40,6 +166,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"]  
 )
+
 
 # Session Pooler対応のデータベース接続関数
 def connect_to_database(db_url, max_retries=3):
@@ -122,6 +249,7 @@ try:
 except Exception as e:
     print(f"❌ DB接続エラー: {e}")
     exit(1)
+
 
 async def get_profile_async(profile_id: int):
     """非同期プロファイル取得"""
