@@ -708,7 +708,7 @@ async def talk_with_fish_text(file: UploadFile):
         
         # ⏱️ 5. メダカ応答生成
         t1 = time.time()
-        reply_text = get_medaka_reply(user_input, latest_health, current_history, None, profile)
+        reply_text = await get_medaka_reply(user_input, latest_health, current_history, None, profile)
         t2 = time.time()
         time_log['05_応答生成'] = t2 - t1
         print(f"[⏱️ 応答生成] {time_log['05_応答生成']:.2f}秒")
