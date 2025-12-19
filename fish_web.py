@@ -14,7 +14,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 import atexit
-#これが消えたらOK/
+#これが消えたらOK
 # ========================================
 # 環境変数・API設定
 # ========================================
@@ -888,10 +888,14 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
         # 会話履歴
         history_context = ""
         if conversation_hist and len(conversation_hist) > 0:
-            recent_history = conversation_hist[-3:]
+            recent_history = conversation_hist[-3:]  # 最新3件
             history_context = "最近の会話履歴:\n"
             for i, h in enumerate(recent_history, 1):
-                history_context += f"{i}. 児童「{h['child']}」→ メダカ「{h['medaka']}」\n"
+                # 🔥 child が None の場合（プロアクティブメッセージ）はスキップ
+                if h['child'] is None:
+                    history_context += f"{i}. メダカ「{h['medaka']}」\n"
+                else:
+                    history_context += f"{i}. 児童「{h['child']}」→ メダカ「{h['medaka']}」\n"
         history_context += "\n"
         
         # 🆕 自己表現レベルの取得
@@ -1310,14 +1314,34 @@ async def get_proactive_message(request: Request):
     
     conversation_count = len(conversation_history.get(profile_id, []))
     message = get_proactive_medaka_message(conversation_count, profile)
+    
+    # 🔥 会話履歴に追加（メモリ内）
+    if profile_id not in conversation_history:
+        conversation_history[profile_id] = []
+    
+    conversation_entry = {
+        "child": None,  # プロアクティブメッセージなので児童発言なし
+        "medaka": message,
+        "timestamp": datetime.now(),
+        "similar_example_used": None,
+        "similarity_score": None,
+        "has_assessment": False,
+        "assessment_result": None,
+        "session_status": None
+    }
+    conversation_history[profile_id].append(conversation_entry)
+    
+    # DB保存
     save_conversation_to_db(
         profile_id=profile_id,
-        speaker='medaka',  # メダカは固定
+        speaker='medaka',
         message=message,
         health_status=latest_health,
         development_stage=profile['development_stage'],
         similar_example_used=False
     )
+    
+    # TTS生成（以下同じ）
     async with openai_client.audio.speech.with_streaming_response.create(
         model="gpt-4o-mini-tts",
         voice="coral",
