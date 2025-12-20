@@ -150,6 +150,7 @@ def cleanup_pool():
 active_session = {}
 conversation_history = defaultdict(lambda: deque(maxlen=10))
 latest_health = "Normal"
+proactive_message_counts = defaultdict(int)
 
 class CONFIG:
     PROFILE_ID = 1  # デフォルト値
@@ -168,87 +169,7 @@ app.add_middleware(
 )
 
 
-# Session Pooler対応のデータベース接続関数
-def connect_to_database(db_url, max_retries=3):
-    if "pooler.supabase.com" in db_url:
-        print("[DB接続] Supabase Pooler接続を使用")
-        if ":5432" in db_url:
-            print("[DB接続] Session Pooler (ポート5432)")
-        elif ":6543" in db_url:
-            print("[DB接続] Transaction Pooler (ポート6543)")
-        
-        if "sslmode=" not in db_url:
-            if "?" in db_url:
-                db_url += "&sslmode=require"
-            else:
-                db_url += "?sslmode=require"
-    
-    print(f"[DB接続] 接続先: {db_url.split('@')[0]}@...")
-    
-    for attempt in range(max_retries):
-        try:
-            print(f"[DB接続] 試行 {attempt + 1}/{max_retries}")
-            
-            conn = psycopg2.connect(
-                db_url,
-                cursor_factory=RealDictCursor,
-                keepalives=1,
-                keepalives_idle=30,
-                keepalives_interval=10,
-                keepalives_count=5,
-                connect_timeout=10
-            )
-            
-            conn.autocommit = True
-            
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                result = cur.fetchone()
-                if result:
-                    print(f"✅ DB接続成功! (試行 {attempt + 1})")
-                    
-                    cur.execute("""
-                        SELECT table_name 
-                        FROM information_schema.tables 
-                        WHERE table_schema = 'public' 
-                        LIMIT 5;
-                    """)
-                    tables = cur.fetchall()
-                    print(f"[DB情報] 検出されたテーブル: {[t['table_name'] for t in tables]}")
-                    
-                    return conn
-                    
-        except psycopg2.OperationalError as e:
-            error_msg = str(e)
-            print(f"⚠️ 接続エラー (試行 {attempt + 1}): {error_msg}")
-            
-            if "password authentication failed" in error_msg:
-                print("[エラー] パスワードが正しくありません")
-                break
-            elif "Network is unreachable" in error_msg:
-                print("[エラー] IPv6接続の問題です。Session Poolerを使用してください")
-                break
-            
-            if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 2
-                print(f"[DB接続] {wait_time}秒待機してリトライ...")
-                time.sleep(wait_time)
-        except Exception as e:
-            print(f"❌ 予期しないエラー: {e}")
-            break
-    
-    return None  
-class CONFIG:
-    PROFILE_ID = 1  # デフォルト値
-# データベース接続
-try:
-    pg_conn = connect_to_database(DB_URL)
-    if not pg_conn:
-        print("❌ データベース接続を確立できませんでした")
-        exit(1)
-except Exception as e:
-    print(f"❌ DB接続エラー: {e}")
-    exit(1)
+
 
 
 async def get_profile_async(profile_id: int):
@@ -258,12 +179,20 @@ async def get_profile_async(profile_id: int):
 
 def get_profile_sync(profile_id: int):
     """同期的にプロファイルを取得"""
-    with pg_conn.cursor() as cur:
-        cur.execute("SELECT * FROM profiles WHERE id = %s;", (profile_id,))
-        profile = cur.fetchone()
-        if not profile:
-            raise HTTPException(404, "Profile not found")
-        return profile
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            raise HTTPException(503, "Database connection not available")
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM profiles WHERE id = %s;", (profile_id,))
+            profile = cur.fetchone()
+            if not profile:
+                raise HTTPException(404, "Profile not found")
+            return profile
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 def save_conversation_to_db(
     profile_id: int,
@@ -276,8 +205,14 @@ def save_conversation_to_db(
     similarity_score: float = None
 ):
     """会話履歴をデータベースに保存"""
+    conn = None
     try:
-        with pg_conn.cursor() as cur:
+        conn = get_db_connection()
+        if conn is None:
+            print("[会話履歴DB] 保存エラー: DB接続なし")
+            return None
+            
+        with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO conversation_history (
                     profile_id, speaker, message, health_status, development_stage,
@@ -303,6 +238,9 @@ def save_conversation_to_db(
     except Exception as e:
         print(f"[会話履歴DB] 保存エラー: {e}")
         return None
+    finally:
+        if conn:
+            release_db_connection(conn)
     
 @app.get("/best.onnx")
 async def serve_onnx_model():
@@ -498,7 +436,7 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
 async def talk_with_fish_text(request: Request):
     start_total = time.time()
     time_log = {}
-    
+
     content_type = request.headers.get('content-type')
 
     if content_type == 'application/json':
@@ -523,7 +461,7 @@ async def talk_with_fish_text(request: Request):
         print(f"[⏱️ 音声認識] {time_log['01_音声認識']:.2f}秒")
     else:
         raise HTTPException(status_code=415, detail="Unsupported media type")
-
+    
     # ⏱️ 2. プロファイル取得
     t1 = time.time()
     profile = await get_profile_async(CONFIG.PROFILE_ID)
@@ -843,26 +781,43 @@ async def find_similar_conversation(user_input: str, development_stage: str, sim
     )
     query_vector = resp.data[0].embedding
     
-    with pg_conn.cursor() as cur:
-        cur.execute("""
-            SELECT text, fish_text, children_reply_1, children_reply_2,
-                   child_reply_1_embedding, child_reply_2_embedding,
-                   user_embedding <-> %s::vector as distance
-            FROM conversations
-            WHERE development_stage = %s
-            ORDER BY distance
-            LIMIT 1;
-        """, (query_vector, development_stage))
-        
-        result = cur.fetchone()
-        print(f"[類似検索] 見つかった例: '{result['text']}'")
-        print(f"[類似検索] 類似度スコア: {result['distance']:.4f}")
-        if result and result['distance'] < similarity_threshold:
-            print("[類似会話] 類似例が見つかりました:", result['text'] )
-            return result
-        else:
-            print("[類似会話] 類似例は見つかりませんでした")
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            print("[類似会話] DB接続なし")
             return None
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT text, fish_text, children_reply_1, children_reply_2,
+                       child_reply_1_embedding, child_reply_2_embedding,
+                       user_embedding <-> %s::vector as distance
+                FROM conversations
+                WHERE development_stage = %s
+                ORDER BY distance
+                LIMIT 1;
+            """, (query_vector, development_stage))
+            
+            result = cur.fetchone()
+            if not result:
+                print("[類似会話] 類似例は見つかりませんでした")
+                return None
+
+            print(f"[類似検索] 見つかった例: '{result['text']}'")
+            print(f"[類似検索] 類似度スコア: {result['distance']:.4f}")
+            if result['distance'] < similarity_threshold:
+                print("[類似会話] 類似例が見つかりました:", result['text'] )
+                return result
+            else:
+                print("[類似会話] 類似例は見つかりませんでした")
+                return None
+    except Exception as e:
+        print(f"❌ [類似検索] エラー: {e}")
+        return None
+    finally:
+        if conn:
+            release_db_connection(conn)
         
 async def get_medaka_reply(user_input, health_status="不明", conversation_hist=None, similar_example=None, profile_info=None):
     start = time.time()
@@ -1093,8 +1048,17 @@ async def upgrade_by_expression_assessment_async(profile_id: int, current_stage:
 
 def _upgrade_stage_sync(profile_id: int, current_stage: str, next_stage: str, reasoning: str) -> dict:
     """同期的なDB更新処理"""
+    conn = None
     try:
-        with pg_conn.cursor() as cur:
+        conn = get_db_connection()
+        if conn is None:
+            print(f"❌ [発話昇格] エラー: DB接続なし")
+            return {
+                'success': False, 'old_stage': current_stage, 'new_stage': current_stage,
+                'reasoning': 'DB接続エラー'
+            }
+
+        with conn.cursor() as cur:
             cur.execute("""
                 UPDATE profiles 
                 SET development_stage = %s,
@@ -1133,6 +1097,9 @@ def _upgrade_stage_sync(profile_id: int, current_stage: str, next_stage: str, re
             'new_stage': current_stage,
             'reasoning': f'エラー: {str(e)}'
         }
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 #"""発達段階を1つ上げる"""
 def upgrade_development_stage(profile_id: int, current_stage: str) -> str:
@@ -1142,8 +1109,14 @@ def upgrade_development_stage(profile_id: int, current_stage: str) -> str:
         print(f"[発達段階] すでに最高段階: {current_stage}")
         return current_stage
     
+    conn = None
     try:
-        with pg_conn.cursor() as cur:
+        conn = get_db_connection()
+        if conn is None:
+            print(f"[発達段階] 更新エラー: DB接続なし")
+            return current_stage
+
+        with conn.cursor() as cur:
             cur.execute("""
                 UPDATE profiles 
                 SET development_stage = %s,
@@ -1164,6 +1137,9 @@ def upgrade_development_stage(profile_id: int, current_stage: str) -> str:
     except Exception as e:
         print(f"[発達段階] 更新エラー: {e}")
         return current_stage
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 # ✅ ブラウザから元気度を受信するエンドポイント
 @app.post("/update_health")
@@ -1205,21 +1181,47 @@ async def set_current_profile(request: Request):
     print(f"[プロファイル変更] {old_id} → {profile_id}")
     
     # 🔥 確認のため取得してログ出力
-    with pg_conn.cursor() as cur:
-        cur.execute("SELECT name, age FROM profiles WHERE id = %s;", (profile_id,))
-        profile = cur.fetchone()
-        if profile:
-            print(f"[プロファイル変更] 選択: {profile['name']}さん ({profile['age']}歳)")
-    
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name, age FROM profiles WHERE id = %s;", (profile_id,))
+                profile = cur.fetchone()
+                if profile:
+                    print(f"[プロファイル変更] 選択: {profile['name']}さん ({profile['age']}歳)")
+        else:
+            print("[プロファイル変更] DB接続がなく、プロファイル名を確認できませんでした。")
+    except Exception as e:
+        print(f"[/set_current_profile] プロファイル名の取得エラー: {e}")
+    finally:
+        if conn:
+            release_db_connection(conn)
+
     return {"success": True, "current_profile_id": CONFIG.PROFILE_ID}
 
 #プロファイルの取得
 @app.get("/profiles")
 async def get_profiles():
     """全プロファイル取得"""
-    with pg_conn.cursor() as cur:
-        cur.execute("SELECT id, name, age, development_stage FROM profiles ORDER BY id;")
-        return cur.fetchall()
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="データベースに接続できません。")
+        
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, age, development_stage FROM profiles ORDER BY id;")
+            profiles = cur.fetchall()
+            return profiles
+            
+    except Exception as e:
+        print(f"[/profiles] エラー: {e}")
+        raise HTTPException(status_code=500, detail="プロファイルの取得中にエラーが発生しました。")
+        
+    finally:
+        if conn:
+            release_db_connection(conn)
 
 @app.post("/profiles")
 async def create_profile(request: Request):
@@ -1228,16 +1230,32 @@ async def create_profile(request: Request):
     name = data.get("name")
     age = data.get("age")
     
-    with pg_conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO profiles (name, age, development_stage, created_at, updated_at)
-            VALUES (%s, %s, 'stage_1', NOW(), NOW())
-            RETURNING id, name, age, development_stage;
-        """, (name, age))
-        return cur.fetchone()
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="データベースに接続できません。")
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO profiles (name, age, development_stage, created_at, updated_at)
+                VALUES (%s, %s, 'stage_1', NOW(), NOW())
+                RETURNING id, name, age, development_stage;
+            """, (name, age))
+            new_profile = cur.fetchone()
+            return new_profile
+    except Exception as e:
+        print(f"[/profiles] 作成エラー: {e}")
+        raise HTTPException(status_code=500, detail="プロファイルの作成中にエラーが発生しました。")
+    finally:
+        if conn:
+            release_db_connection(conn)
     
-def get_proactive_medaka_message(conversation_count, profile):
-    """会話回数に応じてメダカからのプロアクティブメッセージを生成"""
+def get_proactive_medaka_message(profile):
+    """この関数が実行された回数に応じてメダカからのプロアクティブメッセージを生成"""
+    profile_id = profile['id']
+    call_count = proactive_message_counts[profile_id]
+
     messages = {
             0: [  # 初対面の児童に対する言葉
                 "はじめましてなの！ぼく、きんちゃんだよ〜君のお名前おしえてほしいの",
@@ -1276,10 +1294,15 @@ def get_proactive_medaka_message(conversation_count, profile):
             ]
         }
     
-    stage_key = min(conversation_count, 4)
+    stage_key = min(call_count, 4)
     
     import random
-    return random.choice(messages[stage_key])
+    message = random.choice(messages[stage_key])
+
+    # 次回の呼び出しのためにカウントを増やす
+    proactive_message_counts[profile_id] += 1
+    
+    return message
 
 @app.post("/check_session_status")
 async def check_session_status(request: Request):
@@ -1306,14 +1329,25 @@ async def get_proactive_message(request: Request):
     if not profile_id:
         raise HTTPException(400, "profile_id is required")
     
-    with pg_conn.cursor() as cur:
-        cur.execute("SELECT * FROM profiles WHERE id = %s;", (profile_id,))
-        profile = cur.fetchone()
-        if not profile:
-            raise HTTPException(404, "Profile not found")
-    
-    conversation_count = len(conversation_history.get(profile_id, []))
-    message = get_proactive_medaka_message(conversation_count, profile)
+    conn = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            raise HTTPException(status_code=503, detail="データベースに接続できません。")
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM profiles WHERE id = %s;", (profile_id,))
+            profile = cur.fetchone()
+            if not profile:
+                raise HTTPException(404, "Profile not found")
+    except Exception as e:
+        print(f"[/get_proactive_message] プロファイル取得エラー: {e}")
+        raise HTTPException(status_code=500, detail="プロファイルの取得中にエラーが発生しました。")
+    finally:
+        if conn:
+            release_db_connection(conn)
+
+    # conversation_count はメッセージ生成に不要になった
+    message = get_proactive_medaka_message(profile)
     
     # 🔥 会話履歴に追加（メモリ内）
     if profile_id not in conversation_history:
