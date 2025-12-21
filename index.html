@@ -335,11 +335,6 @@
     
     <div class="status-section">
       <div id="status">🎤 音声入力 待機中...</div>
-
-      <form id="text-form" style="margin: 15px 0;">
-          <input type="text" id="text-input" placeholder="または、テキストで話しかける" style="width: 70%; padding: 10px; border-radius: 20px; border: 1px solid #ccc;">
-          <button type="submit" style="padding: 10px 15px; border-radius: 20px; border: none; background: #4facfe; color: white; cursor: pointer;">送信</button>
-      </form>
       
       <div class="vad-controls hidden" id="vadControls">
         <button class="vad-button vad-start-button" id="vadStartBtn">🎤 音声検出開始</button>
@@ -360,51 +355,6 @@
   <audio id="replyAudio" preload="auto" ></audio>
   
   <script>
-document.getElementById('text-form').addEventListener('submit', async function(event) {
-    event.preventDefault();
-    const textInput = document.getElementById('text-input').value;
-    const statusDiv = document.getElementById('status');
-
-    if (!textInput) {
-        statusDiv.textContent = 'テキストを入力してください。';
-        return;
-    }
-
-    statusDiv.textContent = '🔄 テキストを処理中...';
-
-    try {
-        const response = await fetch('/talk_with_fish_text', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ text: textInput })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const audioResponseBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioResponseBlob);
-        
-        statusDiv.textContent = "🐟 メダカが話しています...";
-        
-        const replyAudio = document.getElementById('replyAudio');
-        replyAudio.src = audioUrl;
-        await replyAudio.play();
-
-        replyAudio.onended = () => {
-            statusDiv.textContent = "🎤 話しかけてください...";
-        };
-
-    } catch (error) {
-        console.error('Error:', error);
-        statusDiv.textContent = 'エラーが発生しました。';
-    }
-});
-    //これが消えたらOK
-
 // 設定・定数
 const CONFIG = {
     SERVER_URL: window.location.origin,
@@ -1075,7 +1025,7 @@ const speechModule = {
     // VAD設定
     SILENCE_THRESHOLD: 0.08,      // 無音判定の閾値（0.015 → 0.08）
     SILENCE_DURATION: 800,       // 無音が続いたら停止（ミリ秒）
-    VOICE_THRESHOLD: 10,        // 音声検出の閾値（0.035 → 0.10）
+    VOICE_THRESHOLD: 0.10,        // 音声検出の閾値（0.035 → 0.10）
     MIN_RECORDING_TIME: 500,      // 最低録音時間（ミリ秒）
     recordingStartTime: null,
 

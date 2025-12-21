@@ -14,7 +14,7 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 import atexit
-#これが消えたらOK
+
 # ========================================
 # 環境変数・API設定
 # ========================================
@@ -433,34 +433,17 @@ async def assess_child_expression_level(child_input: str, current_stage: str) ->
         }
 
 @app.post("/talk_with_fish_text")
-async def talk_with_fish_text(request: Request):
+async def talk_with_fish_text(file: UploadFile):
     start_total = time.time()
     time_log = {}
-
-    content_type = request.headers.get('content-type')
-
-    if content_type == 'application/json':
-        # テキスト入力の場合
-        data = await request.json()
-        user_input = data.get('text')
-        if not user_input:
-            raise HTTPException(status_code=400, detail="Text input is empty")
-        print(f"[テキスト入力] 受信: {user_input}")
-    elif 'multipart/form-data' in content_type:
-        # 音声ファイル入力の場合
-        form = await request.form()
-        file = form.get('file')
-        if not file:
-            raise HTTPException(status_code=400, detail="No file uploaded")
-
-        t1 = time.time()
-        transcription_result = await transcribe_audio(file)
-        user_input = transcription_result["text"]
-        t2 = time.time()
-        time_log['01_音声認識'] = t2 - t1
-        print(f"[⏱️ 音声認識] {time_log['01_音声認識']:.2f}秒")
-    else:
-        raise HTTPException(status_code=415, detail="Unsupported media type")
+    
+    # ⏱️ 1. 音声認識（先に実行）
+    t1 = time.time()
+    transcription_result = await transcribe_audio(file)
+    user_input = transcription_result["text"]
+    t2 = time.time()
+    time_log['01_音声認識'] = t2 - t1
+    print(f"[⏱️ 音声認識] {time_log['01_音声認識']:.2f}秒")
     
     # ⏱️ 2. プロファイル取得
     t1 = time.time()
