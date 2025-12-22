@@ -806,13 +806,13 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
     start = time.time()
     
     if health_status == "Active":
-        medaka_state = "元気"
+        medaka_state = "元気ない"
     elif health_status == "Normal":
-        medaka_state = "休憩中"
+        medaka_state = "元気ない"
     elif health_status == "Lethargic":
         medaka_state = "元気ない"
     else:
-        medaka_state = "休憩中"
+        medaka_state = "元気ない"
     
     print("メダカの状態:", medaka_state)
     
