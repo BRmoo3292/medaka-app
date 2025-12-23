@@ -395,35 +395,49 @@ const appState = {
 const browserDetectionModule = {
     session: null,
     modelLoaded: false,
-    inputSize: 640,
+    inputWidth: 512,   //横幅
+    inputHeight: 288,  //高さ
+    lastPadding: null, //パディング情報
 
     async loadModel() {
         try {
+            console.log('[ブラウザ検出] モデル読み込み開始...');
+            
             const modelUrl = `${window.location.origin}/best.onnx`;
+            console.log('[モデルURL]', modelUrl);
+            
             const sessionOptions = {
-                executionProviders: ['wasm'],  //iPhoneではwebglが効果的、Androidではwasmが安定
+                executionProviders: ['webgl', 'wasm'],
                 graphOptimizationLevel: 'all',
                 enableCpuMemArena: false,
                 enableMemPattern: false,
                 logSeverityLevel: 3
             };
-            // ✅ まずfetchでモデルをダウンロード
+            
+            console.log('[モデル] ダウンロード開始...');
             const response = await fetch(modelUrl, {
                 method: 'GET',
                 mode: 'cors',
                 cache: 'default',
                 credentials: 'omit'
             });
+            
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            const arrayBuffer = await response.arrayBuffer();        
-            // ✅ ArrayBufferから直接モデルを作成
+            
+            const arrayBuffer = await response.arrayBuffer();
+            console.log(`[モデル] ダウンロード完了: ${arrayBuffer.byteLength} bytes`);
+            
             this.session = await ort.InferenceSession.create(arrayBuffer, sessionOptions);
             
             this.modelLoaded = true;
+            console.log('✅ [ブラウザ検出] モデル読み込み完了');
             elements.statusDiv.textContent = "✅ 検出モデル準備完了";
+            
         } catch (error) {
+            this.modelLoaded = false;
+            console.error('❌ [ブラウザ検出] モデル読み込み失敗:', error);
             elements.statusDiv.textContent = "⚠️ モデル読み込み失敗";
         }
     },
@@ -434,16 +448,17 @@ const browserDetectionModule = {
             return [];
         }
 
+        const startTime = performance.now();
+        
         try {
-            // 画像を前処理
             const inputTensor = await this.preprocessImage(videoElement);
             
-            // 推論実行
-            const startTime = performance.now();
             const results = await this.session.run({ images: inputTensor });
             const inferenceTime = performance.now() - startTime;
-            // 結果を後処理
-            const detections = this.postprocess(results);
+            
+            console.log(`[ブラウザ検出] 推論時間: ${inferenceTime.toFixed(1)}ms`);
+            
+            const detections = this.postprocess(results, videoElement);
             
             return detections;
             
@@ -454,126 +469,220 @@ const browserDetectionModule = {
     },
 
     async preprocessImage(videoElement) {
-        // Canvasで画像を取得
-        const canvas = document.createElement('canvas');
-        canvas.width = this.inputSize;
-        canvas.height = this.inputSize;
-        const ctx = canvas.getContext('2d');
-        // リサイズして描画
-        ctx.drawImage(videoElement, 0, 0, this.inputSize, this.inputSize);
+        const videoWidth = videoElement.videoWidth;
+        const videoHeight = videoElement.videoHeight;
+        
+        console.log(`[前処理] 元の映像サイズ: ${videoWidth}x${videoHeight}`);
+        
+        // ✅ アスペクト比を計算
+        const videoAspect = videoWidth / videoHeight;
+        const targetAspect = this.inputWidth / this.inputHeight;
+        
+        let canvasWidth, canvasHeight;
+        let offsetX = 0, offsetY = 0;
+        
+        // ✅ アスペクト比に応じてリサイズサイズを決定
+        if (Math.abs(videoAspect - targetAspect) < 0.01) {
+            // ほぼ同じアスペクト比 → そのままリサイズ
+            canvasWidth = this.inputWidth;
+            canvasHeight = this.inputHeight;
+        } else if (videoAspect > targetAspect) {
+            // 映像の方が横長 → 幅を基準に、高さを調整
+            canvasWidth = this.inputWidth;
+            canvasHeight = Math.round(this.inputWidth / videoAspect);
+            offsetY = Math.floor((this.inputHeight - canvasHeight) / 2);
+        } else {
+            // 映像の方が縦長 → 高さを基準に、幅を調整
+            canvasHeight = this.inputHeight;
+            canvasWidth = Math.round(this.inputHeight * videoAspect);
+            offsetX = Math.floor((this.inputWidth - canvasWidth) / 2);
+        }
+        
+        console.log(`[前処理] リサイズ: ${canvasWidth}x${canvasHeight}`);
+        console.log(`[前処理] パディング: offsetX=${offsetX}, offsetY=${offsetY}`);
+        
+        // ✅ ステップ1: アスペクト比を維持してリサイズ
+        const resizeCanvas = document.createElement('canvas');
+        resizeCanvas.width = canvasWidth;
+        resizeCanvas.height = canvasHeight;
+        const resizeCtx = resizeCanvas.getContext('2d');
+        resizeCtx.drawImage(videoElement, 0, 0, canvasWidth, canvasHeight);
+        
+        // ✅ ステップ2: 512x288にパディング
+        const paddedCanvas = document.createElement('canvas');
+        paddedCanvas.width = this.inputWidth;
+        paddedCanvas.height = this.inputHeight;
+        const paddedCtx = paddedCanvas.getContext('2d');
+        
+        // 背景を黒で塗りつぶし
+        paddedCtx.fillStyle = '#000000';
+        paddedCtx.fillRect(0, 0, this.inputWidth, this.inputHeight);
+        
+        // 中央に配置
+        paddedCtx.drawImage(resizeCanvas, offsetX, offsetY);
+        
+        // ✅ パディング情報を保存（後処理で使用）
+        this.lastPadding = {
+            offsetX,
+            offsetY,
+            canvasWidth,
+            canvasHeight,
+            scaleX: videoWidth / canvasWidth,
+            scaleY: videoHeight / canvasHeight
+        };
+        
         // ImageDataを取得
-        const imageData = ctx.getImageData(0, 0, this.inputSize, this.inputSize);
+        const imageData = paddedCtx.getImageData(0, 0, this.inputWidth, this.inputHeight);
         const pixels = imageData.data;
-        const red = new Float32Array(this.inputSize * this.inputSize);
-        const green = new Float32Array(this.inputSize * this.inputSize);
-        const blue = new Float32Array(this.inputSize * this.inputSize);
+        
+        // ✅ RGB分離してFloat32Arrayに変換
+        const red = new Float32Array(this.inputWidth * this.inputHeight);
+        const green = new Float32Array(this.inputWidth * this.inputHeight);
+        const blue = new Float32Array(this.inputWidth * this.inputHeight);
+        
         for (let i = 0; i < pixels.length; i += 4) {
             const idx = i / 4;
-            red[idx] = pixels[i] / 255.0;     // R
-            green[idx] = pixels[i + 1] / 255.0; // G
-            blue[idx] = pixels[i + 2] / 255.0;  // B
+            red[idx] = pixels[i] / 255.0;
+            green[idx] = pixels[i + 1] / 255.0;
+            blue[idx] = pixels[i + 2] / 255.0;
         }
+        
         // チャネルを結合
-        const input = new Float32Array(3 * this.inputSize * this.inputSize);
+        const input = new Float32Array(3 * this.inputWidth * this.inputHeight);
         input.set(red, 0);
-        input.set(green, this.inputSize * this.inputSize);
-        input.set(blue, 2 * this.inputSize * this.inputSize);
-        // Tensorに変換
-        return new ort.Tensor('float32', input, [1, 3, this.inputSize, this.inputSize]);
+        input.set(green, this.inputWidth * this.inputHeight);
+        input.set(blue, 2 * this.inputWidth * this.inputHeight);
+        
+        // ✅ Tensorに変換 [1, 3, 288, 512]
+        return new ort.Tensor('float32', input, [1, 3, this.inputHeight, this.inputWidth]);
     },
 
-    postprocess(results) {
-    const output = results.output0;
-    const outputData = output.data;
-    const [batchSize, numAttributes, numBoxes] = output.dims;
-    const detections = [];
-    const confThreshold = 0.6;
-    const iouThreshold = 0.45;
-    
-    // 8400個のボックスをループ
-    for (let i = 0; i < numBoxes; i++) {
-        // YOLOv8形式: [cx, cy, w, h, class_scores...]
-        const cx = outputData[i];  // 中心X
-        const cy = outputData[numBoxes + i];  // 中心Y
-        const w = outputData[2 * numBoxes + i];  // 幅
-        const h = outputData[3 * numBoxes + i];  // 高さ
+    postprocess(results, videoElement) {
+        const output = results.output0;
+        const outputData = output.data;
+        const [batchSize, numAttributes, numBoxes] = output.dims;
         
-        // クラススコア（メダカは1クラスなので4番目の要素）
-        const classScore = outputData[4 * numBoxes + i];
+        console.log(`[後処理] 出力形状: [${output.dims.join(', ')}]`);
         
-        if (classScore > confThreshold) {
-            // 中心座標を左上座標に変換
-            const x = (cx - w / 2) * elements.video.videoWidth / this.inputSize;
-            const y = (cy - h / 2) * elements.video.videoHeight / this.inputSize;
-            const width = w * elements.video.videoWidth / this.inputSize;
-            const height = h * elements.video.videoHeight / this.inputSize;
-            
-            detections.push({
-                x: x,
-                y: y,
-                width: width,
-                height: height,
-                confidence: classScore,
-                class: 0
-            });
+        const detections = [];
+        const confThreshold = 0.6;
+        const iouThreshold = 0.45;
+        
+        // ✅ パディング情報を取得
+        if (!this.lastPadding) {
+            console.error('[後処理] パディング情報がありません');
+            return [];
         }
-    }
-    
-    // NMS（Non-Maximum Suppression）を適用
-    const filteredDetections = this.applyNMS(detections, iouThreshold);
-    return filteredDetections;
-},applyNMS(boxes, iouThreshold) {
-    // 信頼度でソート
-    boxes.sort((a, b) => b.confidence - a.confidence);
-    
-    const selected = [];
-    const suppressed = new Set();
-    
-    for (let i = 0; i < boxes.length; i++) {
-        if (suppressed.has(i)) continue;
         
-        selected.push(boxes[i]);
+        const { offsetX, offsetY, canvasWidth, canvasHeight, scaleX, scaleY } = this.lastPadding;
         
-        for (let j = i + 1; j < boxes.length; j++) {
-            if (suppressed.has(j)) continue;
+        console.log(`[後処理] スケール: scaleX=${scaleX.toFixed(2)}, scaleY=${scaleY.toFixed(2)}`);
+        
+        // YOLOv8の出力形式: [1, 5, 8400]
+        // 5 = [cx, cy, w, h, confidence]
+        for (let i = 0; i < numBoxes; i++) {
+            const cx = outputData[i];
+            const cy = outputData[numBoxes + i];
+            const w = outputData[2 * numBoxes + i];
+            const h = outputData[3 * numBoxes + i];
+            const confidence = outputData[4 * numBoxes + i];
             
-            const iou = this.calculateIoU(boxes[i], boxes[j]);
-            if (iou > iouThreshold) {
-                suppressed.add(j);
+            if (confidence > confThreshold) {
+                // ✅ パディングを考慮した座標変換
+                const adjustedCx = cx - offsetX;
+                const adjustedCy = cy - offsetY;
+                
+                // パディング領域外は無視
+                if (adjustedCx < 0 || adjustedCx > canvasWidth ||
+                    adjustedCy < 0 || adjustedCy > canvasHeight) {
+                    continue;
+                }
+                
+                // 元の画像サイズに変換
+                const x = (adjustedCx - w / 2) * scaleX;
+                const y = (adjustedCy - h / 2) * scaleY;
+                const width = w * scaleX;
+                const height = h * scaleY;
+                
+                detections.push({
+                    x: Math.max(0, x),
+                    y: Math.max(0, y),
+                    width: Math.min(width, videoElement.videoWidth - x),
+                    height: Math.min(height, videoElement.videoHeight - y),
+                    confidence: confidence,
+                    class: 0
+                });
             }
         }
-    }
-    
-    return selected;
-},// IoU（Intersection over Union）計算
-calculateIoU(box1, box2) {
-    const x1 = Math.max(box1.x, box2.x);
-    const y1 = Math.max(box1.y, box2.y);
-    const x2 = Math.min(box1.x + box1.width, box2.x + box2.width);
-    const y2 = Math.min(box1.y + box1.height, box2.y + box2.height);
-    
-    const intersectionArea = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-    const box1Area = box1.width * box1.height;
-    const box2Area = box2.width * box2.height;
-    const unionArea = box1Area + box2Area - intersectionArea;
-    
-    return intersectionArea / unionArea;
-},
+        
+        // NMS（Non-Maximum Suppression）を適用
+        const filteredDetections = this.applyNMS(detections, iouThreshold);
+        
+        console.log(`[後処理] 検出数: ${filteredDetections.length}`);
+        return filteredDetections;
+    },
+
+    applyNMS(boxes, iouThreshold) {
+        if (boxes.length === 0) return [];
+        
+        // 信頼度でソート
+        boxes.sort((a, b) => b.confidence - a.confidence);
+        
+        const selected = [];
+        const suppressed = new Set();
+        
+        for (let i = 0; i < boxes.length; i++) {
+            if (suppressed.has(i)) continue;
+            
+            selected.push(boxes[i]);
+            
+            for (let j = i + 1; j < boxes.length; j++) {
+                if (suppressed.has(j)) continue;
+                
+                const iou = this.calculateIoU(boxes[i], boxes[j]);
+                if (iou > iouThreshold) {
+                    suppressed.add(j);
+                }
+            }
+        }
+        
+        return selected;
+    },
+
+    calculateIoU(box1, box2) {
+        const x1 = Math.max(box1.x, box2.x);
+        const y1 = Math.max(box1.y, box2.y);
+        const x2 = Math.min(box1.x + box1.width, box2.x + box2.width);
+        const y2 = Math.min(box1.y + box1.height, box2.y + box2.height);
+        
+        const intersectionArea = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+        const box1Area = box1.width * box1.height;
+        const box2Area = box2.width * box2.height;
+        const unionArea = box1Area + box2Area - intersectionArea;
+        
+        return intersectionArea / unionArea;
+    },
 
     drawDetections(canvas, detections) {
         const ctx = canvas.getContext('2d');
         
-        detections.forEach(det => {
+        detections.forEach((det, index) => {
             // バウンディングボックス描画
             ctx.strokeStyle = '#00ff00';
             ctx.lineWidth = 3;
             ctx.strokeRect(det.x, det.y, det.width, det.height);
             
-            // ラベル描画
-            ctx.fillStyle = '#00ff00';
-            ctx.font = '16px Arial';
-            ctx.fillText(`メダカ ${(det.confidence * 100).toFixed(0)}%`, 
-                        det.x, det.y - 5);
+            // ラベル背景
+            const label = `メダカ${index + 1}: ${(det.confidence * 100).toFixed(0)}%`;
+            ctx.font = 'bold 16px Arial';
+            const textWidth = ctx.measureText(label).width;
+            
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.8)';
+            ctx.fillRect(det.x, det.y - 25, textWidth + 10, 25);
+            
+            // ラベルテキスト
+            ctx.fillStyle = '#000000';
+            ctx.fillText(label, det.x + 5, det.y - 7);
         });
     }
 };
