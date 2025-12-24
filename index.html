@@ -695,7 +695,8 @@ const cameraModule = {
                 video: { 
                     facingMode: "environment",
                     width: { ideal: 1280 },
-                    height: { ideal: 720 }
+                    height: { ideal: 720 },
+                    aspectRatio: { ideal: 16/9 }
                 }
             });
             elements.video.srcObject = stream;
