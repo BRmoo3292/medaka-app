@@ -168,10 +168,6 @@ app.add_middleware(
     expose_headers=["*"]  
 )
 
-
-
-
-
 async def get_profile_async(profile_id: int):
     """非同期プロファイル取得"""
     loop = asyncio.get_event_loop()

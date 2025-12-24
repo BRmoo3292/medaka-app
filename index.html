@@ -468,95 +468,117 @@ const browserDetectionModule = {
         }
     },
 
-    async preprocessImage(videoElement) {
-        const videoWidth = videoElement.videoWidth;
-        const videoHeight = videoElement.videoHeight;
+async preprocessImage(videoElement) {
+    let videoWidth = videoElement.videoWidth;
+    let videoHeight = videoElement.videoHeight;
+    
+    console.log(`[前処理] 元の映像サイズ: ${videoWidth}x${videoHeight}`);
+    
+    // ✅ 縦長の場合は回転して横長にする
+    let sourceElement = videoElement;
+    if (videoHeight > videoWidth) {
+        console.log('[前処理] 縦長映像を90度回転');
+        const rotateCanvas = document.createElement('canvas');
+        rotateCanvas.width = videoHeight;  // 回転後の幅
+        rotateCanvas.height = videoWidth;  // 回転後の高さ
+        const rotateCtx = rotateCanvas.getContext('2d');
         
-        console.log(`[前処理] 元の映像サイズ: ${videoWidth}x${videoHeight}`);
+        rotateCtx.translate(videoHeight / 2, videoWidth / 2);
+        rotateCtx.rotate(Math.PI / 2);
+        rotateCtx.drawImage(videoElement, -videoWidth / 2, -videoHeight / 2);
         
-        // ✅ アスペクト比を計算
-        const videoAspect = videoWidth / videoHeight;
-        const targetAspect = this.inputWidth / this.inputHeight;
+        // サイズを入れ替え
+        const temp = videoWidth;
+        videoWidth = videoHeight;
+        videoHeight = temp;
         
-        let canvasWidth, canvasHeight;
-        let offsetX = 0, offsetY = 0;
-        
-        // ✅ アスペクト比に応じてリサイズサイズを決定
-        if (Math.abs(videoAspect - targetAspect) < 0.01) {
-            // ほぼ同じアスペクト比 → そのままリサイズ
-            canvasWidth = this.inputWidth;
-            canvasHeight = this.inputHeight;
-        } else if (videoAspect > targetAspect) {
-            // 映像の方が横長 → 幅を基準に、高さを調整
-            canvasWidth = this.inputWidth;
-            canvasHeight = Math.round(this.inputWidth / videoAspect);
-            offsetY = Math.floor((this.inputHeight - canvasHeight) / 2);
-        } else {
-            // 映像の方が縦長 → 高さを基準に、幅を調整
-            canvasHeight = this.inputHeight;
-            canvasWidth = Math.round(this.inputHeight * videoAspect);
-            offsetX = Math.floor((this.inputWidth - canvasWidth) / 2);
-        }
-        
-        console.log(`[前処理] リサイズ: ${canvasWidth}x${canvasHeight}`);
-        console.log(`[前処理] パディング: offsetX=${offsetX}, offsetY=${offsetY}`);
-        
-        // ✅ ステップ1: アスペクト比を維持してリサイズ
-        const resizeCanvas = document.createElement('canvas');
-        resizeCanvas.width = canvasWidth;
-        resizeCanvas.height = canvasHeight;
-        const resizeCtx = resizeCanvas.getContext('2d');
-        resizeCtx.drawImage(videoElement, 0, 0, canvasWidth, canvasHeight);
-        
-        // ✅ ステップ2: 512x288にパディング
-        const paddedCanvas = document.createElement('canvas');
-        paddedCanvas.width = this.inputWidth;
-        paddedCanvas.height = this.inputHeight;
-        const paddedCtx = paddedCanvas.getContext('2d');
-        
-        // 背景を黒で塗りつぶし
-        paddedCtx.fillStyle = '#000000';
-        paddedCtx.fillRect(0, 0, this.inputWidth, this.inputHeight);
-        
-        // 中央に配置
-        paddedCtx.drawImage(resizeCanvas, offsetX, offsetY);
-        
-        // ✅ パディング情報を保存（後処理で使用）
-        this.lastPadding = {
-            offsetX,
-            offsetY,
-            canvasWidth,
-            canvasHeight,
-            scaleX: videoWidth / canvasWidth,
-            scaleY: videoHeight / canvasHeight
-        };
-        
-        // ImageDataを取得
-        const imageData = paddedCtx.getImageData(0, 0, this.inputWidth, this.inputHeight);
-        const pixels = imageData.data;
-        
-        // ✅ RGB分離してFloat32Arrayに変換
-        const red = new Float32Array(this.inputWidth * this.inputHeight);
-        const green = new Float32Array(this.inputWidth * this.inputHeight);
-        const blue = new Float32Array(this.inputWidth * this.inputHeight);
-        
-        for (let i = 0; i < pixels.length; i += 4) {
-            const idx = i / 4;
-            red[idx] = pixels[i] / 255.0;
-            green[idx] = pixels[i + 1] / 255.0;
-            blue[idx] = pixels[i + 2] / 255.0;
-        }
-        
-        // チャネルを結合
-        const input = new Float32Array(3 * this.inputWidth * this.inputHeight);
-        input.set(red, 0);
-        input.set(green, this.inputWidth * this.inputHeight);
-        input.set(blue, 2 * this.inputWidth * this.inputHeight);
-        
-        // ✅ Tensorに変換 [1, 3, 288, 512]
-        return new ort.Tensor('float32', input, [1, 3, this.inputHeight, this.inputWidth]);
-    },
-
+        sourceElement = rotateCanvas;
+        console.log(`[前処理] 回転後サイズ: ${videoWidth}x${videoHeight}`);
+    }
+    
+    // ✅ アスペクト比を計算
+    const videoAspect = videoWidth / videoHeight;
+    const targetAspect = this.inputWidth / this.inputHeight;
+    
+    let canvasWidth, canvasHeight;
+    let offsetX = 0, offsetY = 0;
+    
+    // ✅ アスペクト比に応じてリサイズサイズを決定
+    if (Math.abs(videoAspect - targetAspect) < 0.01) {
+        // ほぼ同じアスペクト比 → そのままリサイズ
+        canvasWidth = this.inputWidth;
+        canvasHeight = this.inputHeight;
+    } else if (videoAspect > targetAspect) {
+        // 映像の方が横長 → 幅を基準に、高さを調整
+        canvasWidth = this.inputWidth;
+        canvasHeight = Math.round(this.inputWidth / videoAspect);
+        offsetY = Math.floor((this.inputHeight - canvasHeight) / 2);
+    } else {
+        // 映像の方が縦長 → 高さを基準に、幅を調整
+        canvasHeight = this.inputHeight;
+        canvasWidth = Math.round(this.inputHeight * videoAspect);
+        offsetX = Math.floor((this.inputWidth - canvasWidth) / 2);
+    }
+    
+    console.log(`[前処理] リサイズ: ${canvasWidth}x${canvasHeight}`);
+    console.log(`[前処理] パディング: offsetX=${offsetX}, offsetY=${offsetY}`);
+    
+    // ✅ ステップ1: アスペクト比を維持してリサイズ
+    const resizeCanvas = document.createElement('canvas');
+    resizeCanvas.width = canvasWidth;
+    resizeCanvas.height = canvasHeight;
+    const resizeCtx = resizeCanvas.getContext('2d');
+    resizeCtx.drawImage(sourceElement, 0, 0, canvasWidth, canvasHeight);
+    
+    // ✅ ステップ2: 512x288にパディング
+    const paddedCanvas = document.createElement('canvas');
+    paddedCanvas.width = this.inputWidth;
+    paddedCanvas.height = this.inputHeight;
+    const paddedCtx = paddedCanvas.getContext('2d');
+    
+    // 背景を黒で塗りつぶし
+    paddedCtx.fillStyle = '#000000';
+    paddedCtx.fillRect(0, 0, this.inputWidth, this.inputHeight);
+    
+    // 中央に配置
+    paddedCtx.drawImage(resizeCanvas, offsetX, offsetY);
+    
+    // ✅ パディング情報を保存（後処理で使用）
+    this.lastPadding = {
+        offsetX,
+        offsetY,
+        canvasWidth,
+        canvasHeight,
+        scaleX: videoWidth / canvasWidth,
+        scaleY: videoHeight / canvasHeight,
+        wasRotated: sourceElement !== videoElement  // 回転フラグ
+    };
+    
+    // ImageDataを取得
+    const imageData = paddedCtx.getImageData(0, 0, this.inputWidth, this.inputHeight);
+    const pixels = imageData.data;
+    
+    // ✅ RGB分離してFloat32Arrayに変換
+    const red = new Float32Array(this.inputWidth * this.inputHeight);
+    const green = new Float32Array(this.inputWidth * this.inputHeight);
+    const blue = new Float32Array(this.inputWidth * this.inputHeight);
+    
+    for (let i = 0; i < pixels.length; i += 4) {
+        const idx = i / 4;
+        red[idx] = pixels[i] / 255.0;
+        green[idx] = pixels[i + 1] / 255.0;
+        blue[idx] = pixels[i + 2] / 255.0;
+    }
+    
+    // チャネルを結合
+    const input = new Float32Array(3 * this.inputWidth * this.inputHeight);
+    input.set(red, 0);
+    input.set(green, this.inputWidth * this.inputHeight);
+    input.set(blue, 2 * this.inputWidth * this.inputHeight);
+    
+    // ✅ Tensorに変換 [1, 3, 288, 512]
+    return new ort.Tensor('float32', input, [1, 3, this.inputHeight, this.inputWidth]);
+},
     postprocess(results, videoElement) {
         const output = results.output0;
         const outputData = output.data;
