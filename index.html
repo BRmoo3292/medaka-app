@@ -579,70 +579,90 @@ async preprocessImage(videoElement) {
     // ✅ Tensorに変換 [1, 3, 288, 512]
     return new ort.Tensor('float32', input, [1, 3, this.inputHeight, this.inputWidth]);
 },
-    postprocess(results, videoElement) {
-        const output = results.output0;
-        const outputData = output.data;
-        const [batchSize, numAttributes, numBoxes] = output.dims;
+postprocess(results, videoElement) {
+    const output = results.output0;
+    const outputData = output.data;
+    const [batchSize, numAttributes, numBoxes] = output.dims;
+    
+    console.log(`[後処理] 出力形状: [${output.dims.join(', ')}]`);
+    
+    const detections = [];
+    const confThreshold = 0.6;
+    const iouThreshold = 0.45;
+    
+    // ✅ パディング情報を取得
+    if (!this.lastPadding) {
+        console.error('[後処理] パディング情報がありません');
+        return [];
+    }
+    
+    const { offsetX, offsetY, canvasWidth, canvasHeight, scaleX, scaleY, wasRotated } = this.lastPadding;
+    
+    // ✅ 元の映像サイズを取得
+    const originalVideoWidth = videoElement.videoWidth;
+    const originalVideoHeight = videoElement.videoHeight;
+    
+    console.log(`[後処理] スケール: scaleX=${scaleX.toFixed(2)}, scaleY=${scaleY.toFixed(2)}, 回転=${wasRotated}`);
+    
+    for (let i = 0; i < numBoxes; i++) {
+        const cx = outputData[i];
+        const cy = outputData[numBoxes + i];
+        const w = outputData[2 * numBoxes + i];
+        const h = outputData[3 * numBoxes + i];
+        const confidence = outputData[4 * numBoxes + i];
         
-        console.log(`[後処理] 出力形状: [${output.dims.join(', ')}]`);
-        
-        const detections = [];
-        const confThreshold = 0.6;
-        const iouThreshold = 0.45;
-        
-        // ✅ パディング情報を取得
-        if (!this.lastPadding) {
-            console.error('[後処理] パディング情報がありません');
-            return [];
-        }
-        
-        const { offsetX, offsetY, canvasWidth, canvasHeight, scaleX, scaleY } = this.lastPadding;
-        
-        console.log(`[後処理] スケール: scaleX=${scaleX.toFixed(2)}, scaleY=${scaleY.toFixed(2)}`);
-        
-        // YOLOv8の出力形式: [1, 5, 8400]
-        // 5 = [cx, cy, w, h, confidence]
-        for (let i = 0; i < numBoxes; i++) {
-            const cx = outputData[i];
-            const cy = outputData[numBoxes + i];
-            const w = outputData[2 * numBoxes + i];
-            const h = outputData[3 * numBoxes + i];
-            const confidence = outputData[4 * numBoxes + i];
+        if (confidence > confThreshold) {
+            // ✅ パディングを考慮した座標変換
+            const adjustedCx = cx - offsetX;
+            const adjustedCy = cy - offsetY;
             
-            if (confidence > confThreshold) {
-                // ✅ パディングを考慮した座標変換
-                const adjustedCx = cx - offsetX;
-                const adjustedCy = cy - offsetY;
-                
-                // パディング領域外は無視
-                if (adjustedCx < 0 || adjustedCx > canvasWidth ||
-                    adjustedCy < 0 || adjustedCy > canvasHeight) {
-                    continue;
-                }
-                
-                // 元の画像サイズに変換
-                const x = (adjustedCx - w / 2) * scaleX;
-                const y = (adjustedCy - h / 2) * scaleY;
-                const width = w * scaleX;
-                const height = h * scaleY;
-                
-                detections.push({
-                    x: Math.max(0, x),
-                    y: Math.max(0, y),
-                    width: Math.min(width, videoElement.videoWidth - x),
-                    height: Math.min(height, videoElement.videoHeight - y),
-                    confidence: confidence,
-                    class: 0
-                });
+            // パディング領域外は無視
+            if (adjustedCx < 0 || adjustedCx > canvasWidth ||
+                adjustedCy < 0 || adjustedCy > canvasHeight) {
+                continue;
             }
+            
+            // 回転後の座標系での位置
+            let x = (adjustedCx - w / 2) * scaleX;
+            let y = (adjustedCy - h / 2) * scaleY;
+            let width = w * scaleX;
+            let height = h * scaleY;
+            
+            // ✅ 回転していた場合、座標を元の縦長映像に変換
+            if (wasRotated) {
+                // 回転後の座標 (x, y, w, h) → 元の縦長座標に変換
+                // 90度回転の逆変換: (x, y) → (y, rotatedWidth - x - w)
+                const rotatedWidth = originalVideoHeight;  // 回転後の幅 = 元の高さ
+                const rotatedHeight = originalVideoWidth;  // 回転後の高さ = 元の幅
+                
+                const newX = y;
+                const newY = rotatedWidth - x - width;
+                const newWidth = height;
+                const newHeight = width;
+                
+                x = newX;
+                y = newY;
+                width = newWidth;
+                height = newHeight;
+            }
+            
+            detections.push({
+                x: Math.max(0, x),
+                y: Math.max(0, y),
+                width: Math.min(width, originalVideoWidth - Math.max(0, x)),
+                height: Math.min(height, originalVideoHeight - Math.max(0, y)),
+                confidence: confidence,
+                class: 0
+            });
         }
-        
-        // NMS（Non-Maximum Suppression）を適用
-        const filteredDetections = this.applyNMS(detections, iouThreshold);
-        
-        console.log(`[後処理] 検出数: ${filteredDetections.length}`);
-        return filteredDetections;
-    },
+    }
+    
+    // NMS（Non-Maximum Suppression）を適用
+    const filteredDetections = this.applyNMS(detections, iouThreshold);
+    
+    console.log(`[後処理] 検出数: ${filteredDetections.length}`);
+    return filteredDetections;
+},
 
     applyNMS(boxes, iouThreshold) {
         if (boxes.length === 0) return [];
