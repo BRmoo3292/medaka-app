@@ -1777,7 +1777,7 @@ async loadProfiles() {
             
             if (res.ok) {
                 alert('✅ アカウントを作成しました');
-                await this.loadProfiles();
+                  await app.loadProfiles(); 
             }
         });
         

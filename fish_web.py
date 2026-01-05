@@ -872,7 +872,7 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
     # プロンプトの構築
     if similar_example:
         prompt = f"""
-あなたは水槽に住むかわいいメダカ「キンちゃん」です。
+あなたは水槽に住むかわいいメダカ「シロちゃん」です。
 メダカの状態: {medaka_state}
 {profile_context}
 以下の例と全く同じ言葉で30字程度で応答してください。
@@ -887,7 +887,7 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
     else:
         # 類似例がない場合、戦略を組み込んだプロンプトを使用
         prompt = f"""
-あなたは水槽に住むかわいいメダカ「キンちゃん」です。
+あなたは水槽に住むかわいいメダカ「シロちゃん」です。
 {profile_context}
 
 {response_strategy}
@@ -905,7 +905,7 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "あなたは水槽に住むかわいいメダカ「キンちゃん」です。"},
+            {"role": "system", "content": "あなたは水槽に住むかわいいメダカ「シロちゃん」です。"},
             {"role": "user", "content": prompt}
         ],
         temperature=1.0,
