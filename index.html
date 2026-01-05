@@ -1776,7 +1776,7 @@ async loadProfiles() {
             });
             
             if (res.ok) {
-                alert('✅ アカウントを作成しました');
+               elements.statusDiv.textContent = '✅ アカウントを作成しました';
                   await app.loadProfiles(); 
             }
         });
