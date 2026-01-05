@@ -887,7 +887,7 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
     else:
         # 類似例がない場合、戦略を組み込んだプロンプトを使用
         prompt = f"""
-あなたは水槽に住むかわいいメダカ「シロちゃん」です。
+あなたは水槽に住むかわいいメダカ「シロちゃん」です。応答は「」や名前を含めず、セリフのみを出力してください。
 {profile_context}
 
 {response_strategy}
@@ -905,7 +905,7 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "あなたは水槽に住むかわいいメダカ「シロちゃん」です。"},
+            {"role": "system", "content": "あなたは水槽に住むかわいいメダカ「シロちゃん」です。応答は「」や名前を含めず、セリフのみを出力してください。"},
             {"role": "user", "content": prompt}
         ],
         temperature=1.0,
@@ -1236,7 +1236,7 @@ def get_proactive_medaka_message(profile):
     call_count = proactive_message_counts[profile_id]
     messages = {
             0: [  # 初対面の児童に対する言葉
-                "はじめましてなの！ぼく、きんちゃんだよ〜君のお名前おしえてほしいの",
+                "はじめましてなの！ぼく、しろちゃんだよ〜君のお名前おしえてほしいの",
                 "こんにちは〜ぴちぴち！君はどこから来たの？",
                 "こんにちは〜ぴちぴち！ぼくはメダカのきんちゃんだよ〜君はだあれ？",
                 "きょう出会えてうれしいの！君はいくつなの？",
