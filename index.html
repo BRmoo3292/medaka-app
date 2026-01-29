@@ -774,8 +774,7 @@
                             // 🔥 iOSではさらに解像度を下げる (480p -> 360p) + フレームレート制限
                             width: { ideal: CONFIG.IS_IOS ? 480 : 1280 },
                             height: { ideal: CONFIG.IS_IOS ? 360 : 720 },
-                            aspectRatio: { ideal: 16 / 9 },
-                            frameRate: { ideal: CONFIG.IS_IOS ? 15 : 30, max: 30 }
+                            aspectRatio: { ideal: 16 / 9 }
                         }
                     });
                     elements.video.srcObject = stream;
