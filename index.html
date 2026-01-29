@@ -393,6 +393,24 @@
                     box-shadow: 0 0 0 0 rgba(255, 94, 98, 0);
                 }
             }
+
+            .fullscreen-rec-btn {
+                position: absolute;
+                bottom: 30px;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 2000;
+                width: 100px;
+                height: 100px;
+                font-size: 40px;
+                box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+                display: none;
+                /* デフォルト非表示 */
+            }
+
+            .fullscreen-rec-btn.visible {
+                display: flex;
+            }
         }
     </style>
     <!-- 🔥 ONNX Runtimeのバージョンを1.18.0に固定（最新版でのiOSクラッシュ回避） -->
@@ -453,6 +471,8 @@
         <div class="fullscreen-controls">
             <button class="control-button exit-button" id="exitBtn">✕</button>
         </div>
+        <!-- フルスクリーン用録音ボタン -->
+        <button class="manual-record-btn fullscreen-rec-btn" id="fullscreenRecordBtn">🎙️</button>
     </div>
 
     <audio id="replyAudio" preload="auto"></audio>
@@ -1674,6 +1694,14 @@
                 document.body.style.overflow = 'hidden';
                 elements.canvasFullscreenBtn.textContent = '📱 戻る';
 
+                // 🆕 フルスクリーン時に手動モードならボタンを表示
+                const fsRecordBtn = document.getElementById('fullscreenRecordBtn');
+                if (speechModule.mode === 'manual') {
+                    fsRecordBtn.classList.add('visible');
+                } else {
+                    fsRecordBtn.classList.remove('visible');
+                }
+
                 if (appState.showingAnalysis && appState.currentImageData) {
                     this.updateFullscreenCanvas(appState.currentImageData);
                 } else {
@@ -1870,6 +1898,15 @@
                 manualBtn.addEventListener('mouseup', stopRec);
                 manualBtn.addEventListener('touchend', stopRec);
                 manualBtn.addEventListener('mouseleave', stopRec); // 範囲外に出たときも停止
+
+                // 🆕 フルスクリーン用録音ボタン
+                const fsRecordBtn = document.getElementById('fullscreenRecordBtn');
+
+                fsRecordBtn.addEventListener('mousedown', startRec);
+                fsRecordBtn.addEventListener('touchstart', startRec);
+                fsRecordBtn.addEventListener('mouseup', stopRec);
+                fsRecordBtn.addEventListener('touchend', stopRec);
+                fsRecordBtn.addEventListener('mouseleave', stopRec);
             },
 
             setupStartButton() {
