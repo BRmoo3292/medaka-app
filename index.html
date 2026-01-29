@@ -367,13 +367,16 @@
         // 設定・定数
         const CONFIG = {
             SERVER_URL: window.location.origin,
-            FRAME_RATE: 34,
-            PROFILE_ID: 1
+            PROFILE_ID: 1,
+            IS_IOS: /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
         };
 
-        // 🔥 iOS判定
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        // 🔥 iOS対策: 設定のオーバーライド
+        if (CONFIG.IS_IOS) {
+            CONFIG.FRAME_RATE = 500; // iOSは0.5秒に1回 (2FPS) に制限してクラッシュ回避
+        } else {
+            CONFIG.FRAME_RATE = 34; // デフォルトのフレームレート
+        }
 
         // 🔥 iOS対策: ONNX Runtimeのマルチスレッドを無効化（クラッシュ回避）
         // iOS Safariではセキュリティ制限によりSharedArrayBufferが使えず、
@@ -418,6 +421,11 @@
             inputHeight: 288,  //高さ
             lastPadding: null, //パディング情報
 
+            // ✅ 再利用用のCanva (メモリ節約)
+            _rotateCanvas: null,
+            _resizeCanvas: null,
+            _paddedCanvas: null,
+
             async loadModel() {
                 try {
                     console.log('[ブラウザ検出] モデル読み込み開始...');
@@ -427,7 +435,7 @@
 
                     const sessionOptions = {
                         // 🔥 iOSではWebGLバックエンドが不安定なため、WASM(CPU)のみを使用する
-                        executionProviders: isIOS ? ['wasm'] : ['webgl', 'wasm'],
+                        executionProviders: CONFIG.IS_IOS ? ['wasm'] : ['webgl', 'wasm'],
                         graphOptimizationLevel: 'all',
                         enableCpuMemArena: false,
                         enableMemPattern: false,
@@ -494,11 +502,16 @@
 
                 console.log(`[前処理] 元の映像サイズ: ${videoWidth}x${videoHeight}`);
 
+                // ✅ キャンバスの初期化（初回のみ）
+                if (!this._rotateCanvas) this._rotateCanvas = document.createElement('canvas');
+                if (!this._resizeCanvas) this._resizeCanvas = document.createElement('canvas');
+                if (!this._paddedCanvas) this._paddedCanvas = document.createElement('canvas');
+
                 // ✅ 縦長の場合は回転して横長にする
                 let sourceElement = videoElement;
                 if (videoHeight > videoWidth) {
                     console.log('[前処理] 縦長映像を90度回転');
-                    const rotateCanvas = document.createElement('canvas');
+                    const rotateCanvas = this._rotateCanvas;
                     rotateCanvas.width = videoHeight;  // 回転後の幅
                     rotateCanvas.height = videoWidth;  // 回転後の高さ
                     const rotateCtx = rotateCanvas.getContext('2d');
@@ -540,21 +553,21 @@
                     offsetX = Math.floor((this.inputWidth - canvasWidth) / 2);
                 }
 
-                console.log(`[前処理] リサイズ: ${canvasWidth}x${canvasHeight}`);
-                console.log(`[前処理] パディング: offsetX=${offsetX}, offsetY=${offsetY}`);
+                // console.log(`[前処理] リサイズ: ${canvasWidth}x${canvasHeight}`);
+                // console.log(`[前処理] パディング: offsetX=${offsetX}, offsetY=${offsetY}`);
 
                 // ✅ ステップ1: アスペクト比を維持してリサイズ
-                const resizeCanvas = document.createElement('canvas');
+                const resizeCanvas = this._resizeCanvas;
                 resizeCanvas.width = canvasWidth;
                 resizeCanvas.height = canvasHeight;
-                const resizeCtx = resizeCanvas.getContext('2d');
+                const resizeCtx = resizeCanvas.getContext('2d', { willReadFrequently: true });
                 resizeCtx.drawImage(sourceElement, 0, 0, canvasWidth, canvasHeight);
 
                 // ✅ ステップ2: 512x288にパディング
-                const paddedCanvas = document.createElement('canvas');
+                const paddedCanvas = this._paddedCanvas;
                 paddedCanvas.width = this.inputWidth;
                 paddedCanvas.height = this.inputHeight;
-                const paddedCtx = paddedCanvas.getContext('2d');
+                const paddedCtx = paddedCanvas.getContext('2d', { willReadFrequently: true });
 
                 // 背景を黒で塗りつぶし
                 paddedCtx.fillStyle = '#000000';
@@ -757,8 +770,8 @@
                         video: {
                             facingMode: "environment",
                             // 🔥 iOSではメモリ負荷を下げるために解像度を制限する
-                            width: { ideal: isIOS ? 640 : 1280 },
-                            height: { ideal: isIOS ? 480 : 720 },
+                            width: { ideal: CONFIG.IS_IOS ? 640 : 1280 },
+                            height: { ideal: CONFIG.IS_IOS ? 480 : 720 },
                             aspectRatio: { ideal: 16 / 9 }
                         }
                     });
@@ -1713,7 +1726,13 @@
                 uiModule.setupStartButton();
                 uiModule.setupSwitchButton();
 
-                setInterval(() => imageModule.sendFrame(), CONFIG.FRAME_RATE);
+                // setInterval(() => imageModule.sendFrame(), CONFIG.FRAME_RATE);
+                // 🔥 iOS対策: 再帰的なsetTimeoutループに変更（処理落ち時のスタック蓄積を防ぐ）
+                const processLoop = async () => {
+                    await imageModule.sendFrame();
+                    setTimeout(processLoop, CONFIG.FRAME_RATE);
+                };
+                processLoop();
 
                 this.optimizeTouchEvents();
 
