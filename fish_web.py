@@ -691,7 +691,7 @@ async def talk_with_fish_text(file: UploadFile):
         
         async with openai_client.audio.speech.with_streaming_response.create(
             model="gpt-4o-mini-tts",
-            voice="coral",
+            voice="nova",
             instructions="""
             Voice Affect:のんびりしていて、かわいらしい無邪気さ  
             Tone:ほんわか、少しおっとり、親しみやすい  
@@ -738,7 +738,7 @@ async def generate_tts(text: str) -> str:
     """TTS生成（非同期関数）"""
     async with openai_client.audio.speech.with_streaming_response.create(
         model="gpt-4o-mini-tts",
-        voice="coral",
+        voice="nova",
         instructions="""
         Voice Affect:のんびりしていて、かわいらしい無邪気さ  
         Tone:ほんわか、少しおっとり、親しみやすい  
