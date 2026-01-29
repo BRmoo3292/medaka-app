@@ -769,9 +769,9 @@
                     const stream = await navigator.mediaDevices.getUserMedia({
                         video: {
                             facingMode: "environment",
-                            // 🔥 iOSではメモリ負荷を下げるために解像度を制限する
-                            width: { ideal: CONFIG.IS_IOS ? 640 : 1280 },
-                            height: { ideal: CONFIG.IS_IOS ? 480 : 720 },
+                            // 🔥 iOSではさらに解像度を下げる (480p -> 360p)
+                            width: { ideal: CONFIG.IS_IOS ? 480 : 1280 },
+                            height: { ideal: CONFIG.IS_IOS ? 360 : 720 },
                             aspectRatio: { ideal: 16 / 9 }
                         }
                     });
@@ -1682,6 +1682,20 @@
                 elements.startButton.addEventListener("click", () => {
                     elements.replyAudio.src = "";
                     elements.replyAudio.load();
+
+                    // 🔥 iOS対策: ボタンを押してから解析ループを開始する（初期負荷を減らす）
+                    if (!window.analysisStarted) {
+                        window.analysisStarted = true;
+                        const processLoop = async () => {
+                            if (window.analysisStarted) {
+                                await imageModule.sendFrame();
+                                setTimeout(processLoop, CONFIG.FRAME_RATE);
+                            }
+                        };
+                        processLoop();
+                        console.log('✅ 解析ループを開始しました');
+                    }
+
                     setTimeout(() => {
                         appState.shouldRestart = true;
                         elements.startButton.classList.add('hidden');
@@ -1727,12 +1741,14 @@
                 uiModule.setupSwitchButton();
 
                 // setInterval(() => imageModule.sendFrame(), CONFIG.FRAME_RATE);
-                // 🔥 iOS対策: 再帰的なsetTimeoutループに変更（処理落ち時のスタック蓄積を防ぐ）
-                const processLoop = async () => {
-                    await imageModule.sendFrame();
-                    setTimeout(processLoop, CONFIG.FRAME_RATE);
-                };
-                processLoop();
+                // 🔥 iOS対策: 初期状態ではループを回さない（ボタン押下後に開始）
+                // const processLoop = async () => {
+                //     await imageModule.sendFrame();
+                //     setTimeout(processLoop, CONFIG.FRAME_RATE);
+                // };
+                // processLoop();
+
+                elements.statusDiv.textContent = "🚀 「会話を始める」を押してスタート";
 
                 this.optimizeTouchEvents();
 
