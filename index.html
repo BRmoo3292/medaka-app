@@ -321,7 +321,8 @@
             }
         }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <!-- 🔥 ONNX Runtimeのバージョンを1.18.0に固定（最新版でのiOSクラッシュ回避） -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
 </head>
 
 <body>
@@ -560,14 +561,15 @@
                 const resizeCanvas = this._resizeCanvas;
                 resizeCanvas.width = canvasWidth;
                 resizeCanvas.height = canvasHeight;
-                const resizeCtx = resizeCanvas.getContext('2d', { willReadFrequently: true });
+                // 🔥 iOSでwillReadFrequentlyがメモリリークの原因になることがあるため削除
+                const resizeCtx = resizeCanvas.getContext('2d');
                 resizeCtx.drawImage(sourceElement, 0, 0, canvasWidth, canvasHeight);
 
                 // ✅ ステップ2: 512x288にパディング
                 const paddedCanvas = this._paddedCanvas;
                 paddedCanvas.width = this.inputWidth;
                 paddedCanvas.height = this.inputHeight;
-                const paddedCtx = paddedCanvas.getContext('2d', { willReadFrequently: true });
+                const paddedCtx = paddedCanvas.getContext('2d');
 
                 // 背景を黒で塗りつぶし
                 paddedCtx.fillStyle = '#000000';
@@ -769,10 +771,11 @@
                     const stream = await navigator.mediaDevices.getUserMedia({
                         video: {
                             facingMode: "environment",
-                            // 🔥 iOSではさらに解像度を下げる (480p -> 360p)
+                            // 🔥 iOSではさらに解像度を下げる (480p -> 360p) + フレームレート制限
                             width: { ideal: CONFIG.IS_IOS ? 480 : 1280 },
                             height: { ideal: CONFIG.IS_IOS ? 360 : 720 },
-                            aspectRatio: { ideal: 16 / 9 }
+                            aspectRatio: { ideal: 16 / 9 },
+                            frameRate: { ideal: CONFIG.IS_IOS ? 15 : 30, max: 30 }
                         }
                     });
                     elements.video.srcObject = stream;
