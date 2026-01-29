@@ -371,6 +371,10 @@
             PROFILE_ID: 1
         };
 
+        // 🔥 iOS判定
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
         // 🔥 iOS対策: ONNX Runtimeのマルチスレッドを無効化（クラッシュ回避）
         // iOS Safariではセキュリティ制限によりSharedArrayBufferが使えず、
         // マルチスレッド版WASM(ort-wasm-simd-threaded)でクラッシュするため、シングルスレッド版を強制します。
@@ -422,7 +426,8 @@
                     console.log('[モデルURL]', modelUrl);
 
                     const sessionOptions = {
-                        executionProviders: ['webgl', 'wasm'],
+                        // 🔥 iOSではWebGLバックエンドが不安定なため、WASM(CPU)のみを使用する
+                        executionProviders: isIOS ? ['wasm'] : ['webgl', 'wasm'],
                         graphOptimizationLevel: 'all',
                         enableCpuMemArena: false,
                         enableMemPattern: false,
@@ -751,8 +756,9 @@
                     const stream = await navigator.mediaDevices.getUserMedia({
                         video: {
                             facingMode: "environment",
-                            width: { ideal: 1280 },
-                            height: { ideal: 720 },
+                            // 🔥 iOSではメモリ負荷を下げるために解像度を制限する
+                            width: { ideal: isIOS ? 640 : 1280 },
+                            height: { ideal: isIOS ? 480 : 720 },
                             aspectRatio: { ideal: 16 / 9 }
                         }
                     });
