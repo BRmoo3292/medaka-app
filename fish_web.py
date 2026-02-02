@@ -690,13 +690,9 @@ async def talk_with_fish_text(file: UploadFile):
         t_first_chunk = None
         
         async with openai_client.audio.speech.with_streaming_response.create(
-            model="gpt-4o-mini-tts",
-            voice="coral",
-            instructions="""
-        Voice Affect:かわいらしい
-        Tone:高い
-        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
-            """,
+            model="tts-1",
+            voice="nova",
+            instructions="Voice Affect:かわいらしい, Tone:高い, Pacing:ゆっくり",
             speed=1.0,
             input=reply_text,
             response_format="mp3",
@@ -737,13 +733,9 @@ async def talk_with_fish_text(file: UploadFile):
 async def generate_tts(text: str) -> str:
     """TTS生成（非同期関数）"""
     async with openai_client.audio.speech.with_streaming_response.create(
-        model="gpt-4o-mini-tts",
-        voice="coral",
-        instructions="""
-        Voice Affect:かわいらしい
-        Tone:高い
-        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
-        """,
+        model="tts-1",
+        voice="nova",
+        instructions="Voice Affect:かわいらしい, Tone:高い, Pacing:ゆっくり",
         speed=1.0,
         input=text,
         response_format="mp3",
@@ -1352,13 +1344,9 @@ async def get_proactive_message(request: Request):
     
     # TTS生成（以下同じ）
     async with openai_client.audio.speech.with_streaming_response.create(
-        model="gpt-4o-mini-tts",
-        voice="coral",
-        instructions="""
-        Voice Affect:かわいらしい
-        Tone:高い
-        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
-        """,
+        model="tts-1",
+        voice="nova",
+        instructions="Voice Affect:かわいらしい, Tone:高い, Pacing:ゆっくり",
         speed=1.0,
         input=message,
         response_format="mp3",
