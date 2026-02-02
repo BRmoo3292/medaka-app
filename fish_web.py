@@ -1,4 +1,4 @@
- from fastapi import FastAPI, UploadFile, HTTPException, Request
+from fastapi import FastAPI, UploadFile, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
@@ -897,7 +897,7 @@ async def get_medaka_reply(user_input, health_status="不明", conversation_hist
 上記の【応答戦略】に基づき、30文字以内で、優しく小学生らしい口調で答えてください。
 メダカの状態: {medaka_state}
 
-キンちゃん:"""
+シロちゃん:"""
     
     print(f"[応答生成] プロンプト作成完了\n{prompt}")
 
@@ -1222,9 +1222,7 @@ async def create_profile(request: Request):
                 RETURNING id, name, age, development_stage;
             """, (name, age))
             new_profile = cur.fetchone()
-            return new_profile
-    except Exception as e:
-        print(f"[/profiles] 作成エラー: {e}")
+
         raise HTTPException(status_code=500, detail="プロファイルの作成中にエラーが発生しました。")
     finally:
         if conn:
@@ -1359,7 +1357,7 @@ async def get_proactive_message(request: Request):
         instructions="""
         Voice Affect:かわいらしい
         Tone:高い
-        Pacing:全体的にゆっくりめ、言葉と言葉の間に余裕を持たせる  
+        Pacing:言葉と言葉の間に余裕を持たせる  
         """,
         speed=1.0,
         input=message,
